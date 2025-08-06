@@ -1,0 +1,6 @@
+session-whatsappweb/
+tokens/
+node_modules/
+*.log
+src/logs/
+session-whatsappweb/**/* 
