@@ -1,0 +1,32 @@
+###
+POST http://localhost:3330/api/send-message
+Content-Type: application/json
+
+{
+    "number": "51935926562@c.us",
+    "message":"Hola World"
+}
+
+###
+POST http://localhost:3330/api/poll
+Content-Type: application/json
+
+{
+    "number": "51935926562@c.us",
+    "message": { "name": "Encuesta de satisfacción", "options": [
+        { "name": "option 1" }
+    ], "selectableOptionsCount": 1 }
+}
+
+###{
+###    "number": "51935926562@c.us",
+###    "message": {
+###        "name": "Encuesta de satisfacción",
+###        "options": [
+###            { "name": "option 1" },
+###            { "name": "option 2" },
+###            { "name": "option 3" },
+###        ],
+###        "selectableOptionsCount": 1
+###    }
+###}
