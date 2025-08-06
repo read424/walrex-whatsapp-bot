@@ -1,0 +1,15 @@
+{
+    "keep": {
+        "days": true,
+        "amount": 14
+    },
+    "auditLog": "/home/developer01/bot-walrexapp/src/infrastructure/logs/.97ac025ec0f1934710b513af13c14c9365327a61-audit.json",
+    "files": [
+        {
+            "date": 1754431109260,
+            "name": "/home/developer01/bot-walrexapp/src/infrastructure/logs/application-WhatsAppBotRefactored-2025-08-05.log",
+            "hash": "80dc5e1fdfa51d1938d01256b6813ac410f18a1ed59c066e3662d8b53a446c89"
+        }
+    ],
+    "hashType": "sha256"
+}

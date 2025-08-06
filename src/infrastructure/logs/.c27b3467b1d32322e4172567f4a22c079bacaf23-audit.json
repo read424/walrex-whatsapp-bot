@@ -1,0 +1,15 @@
+{
+    "keep": {
+        "days": true,
+        "amount": 14
+    },
+    "auditLog": "/home/developer01/bot-walrexapp/src/infrastructure/logs/.c27b3467b1d32322e4172567f4a22c079bacaf23-audit.json",
+    "files": [
+        {
+            "date": 1754425908893,
+            "name": "/home/developer01/bot-walrexapp/src/infrastructure/logs/error-WhatsAppWebJsStrategy-2025-08-05.log",
+            "hash": "e960fe4818b9cafd98c4618e0f343dab4340c81fd8bb1593b0aa405ebad5712f"
+        }
+    ],
+    "hashType": "sha256"
+}

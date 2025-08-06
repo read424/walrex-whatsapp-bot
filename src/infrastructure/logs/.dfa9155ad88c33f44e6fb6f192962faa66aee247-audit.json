@@ -1,0 +1,15 @@
+{
+    "keep": {
+        "days": true,
+        "amount": 14
+    },
+    "auditLog": "/home/developer01/bot-walrexapp/src/infrastructure/logs/.dfa9155ad88c33f44e6fb6f192962faa66aee247-audit.json",
+    "files": [
+        {
+            "date": 1754431109257,
+            "name": "/home/developer01/bot-walrexapp/src/infrastructure/logs/error-MenuManager-2025-08-05.log",
+            "hash": "30291ac4dbe568bc4edefa027a892811d9db85a3fa1d26b9fa920802ccb56a4a"
+        }
+    ],
+    "hashType": "sha256"
+}

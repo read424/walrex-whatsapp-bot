@@ -1,0 +1,15 @@
+{
+    "keep": {
+        "days": true,
+        "amount": 14
+    },
+    "auditLog": "/home/developer01/bot-walrexapp/src/infrastructure/logs/.9b29f7f4036f14bf288f1ba6af88ea8d5184ff8d-audit.json",
+    "files": [
+        {
+            "date": 1754425801532,
+            "name": "/home/developer01/bot-walrexapp/src/infrastructure/logs/error-APP-2025-08-05.log",
+            "hash": "67c38aa71bc146ddf783550dc012345629ede785cf3fd1f9bdcc4c114d623039"
+        }
+    ],
+    "hashType": "sha256"
+}
