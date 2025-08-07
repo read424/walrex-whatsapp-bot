@@ -8,6 +8,7 @@ const UserRepository = require('./userRepository');
 const PackagesName = require('./PackagesName.entity');
 const PackageNameRepository = require('./PackageNameRepository');
 const SequelizePackageAdapter = require('./SequelizePackageAdapter');
+const BinanceApiPort = require('./BinanceApiPort');
 
 module.exports = {
     CustomerService,
@@ -19,5 +20,6 @@ module.exports = {
     UserRepository,
     PackagesName,
     PackageNameRepository,
-    SequelizePackageAdapter
+    SequelizePackageAdapter,
+    BinanceApiPort
 }
