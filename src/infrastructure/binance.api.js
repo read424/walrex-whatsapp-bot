@@ -287,7 +287,9 @@ const binanceAPI = new BinanceAPI();
         // Crear el payload para enviar
         const payload = {
             numberphone: '51935926562@c.us',
-            pathimg: outputFilePath,
+            imageBuffer: jpgBase64,
+            mimeType: 'image/jpeg',
+            filename: 'price_chart.jpg'
         };
         // Configurar la solicitud con axios
         const response = await axios.post("http://localhost:3330/api/send-message-media", payload, {
