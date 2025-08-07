@@ -9,6 +9,55 @@ const router = express.Router();
 
 const packageService = new RegistryPackageService();
 
+/**
+ * Función de utilidad para crear un objeto MessageMedia de manera robusta
+ * @param {string} mimeType - Tipo MIME del archivo
+ * @param {string} base64Data - Datos en base64
+ * @param {string} filename - Nombre del archivo
+ * @returns {MessageMedia} Objeto MessageMedia
+ */
+function createMessageMedia(mimeType, base64Data, filename) {
+    try {
+        // Validar parámetros
+        if (!mimeType || !base64Data) {
+            throw new Error('mimeType and base64Data are required');
+        }
+        
+        // Validar que base64Data sea una cadena válida
+        if (typeof base64Data !== 'string' || base64Data.length === 0) {
+            throw new Error('base64Data must be a non-empty string');
+        }
+        
+        // Validar que el base64 sea válido
+        try {
+            Buffer.from(base64Data, 'base64');
+        } catch (error) {
+            throw new Error('Invalid base64 data');
+        }
+        
+        // Crear el MessageMedia
+        const media = new MessageMedia(
+            mimeType,
+            base64Data,
+            filename || 'file'
+        );
+        
+        // Validar que el objeto se creó correctamente
+        if (!media || !media.mimetype || !media.data) {
+            throw new Error('Failed to create valid MessageMedia object');
+        }
+        
+        return media;
+    } catch (error) {
+        structuredLogger.error('API_ROUTES', 'Error creating MessageMedia', error, {
+            mimeType,
+            base64DataLength: base64Data?.length || 0,
+            filename
+        });
+        throw error;
+    }
+}
+
 // Middleware para logging de requests
 router.use((req, res, next) => {
     structuredLogger.info('API_ROUTES', 'API request', {
@@ -57,21 +106,112 @@ router.post('/send-message', async (req, res) => {
 });
 
 router.post('/send-message-media', async (req, res) => {
-    const { numberphone, pathimg } = req.body;
-    if(!numberphone || !pathimg){
-        return res.status(400).json({ error: 'Number and mediaUrl are required' });
+    const { numberphone, imageBuffer, mimeType, filename } = req.body;
+    if(!numberphone || !imageBuffer){
+        return res.status(400).json({ error: 'Number and imageBuffer are required' });
     }
     try{
+        structuredLogger.info('API_ROUTES', 'Processing media message request', {
+            numberphone,
+            mimeType,
+            filename,
+            bufferSize: imageBuffer?.length || 0,
+            correlationId: req.correlationId
+        });
+        
         const whatsappContext = req.whatsappContext;
-        if (fs.existsSync(pathimg)) {
-            const media = MessageMedia.fromFilePath(pathimg);
-            await whatsappContext.sendMessage(numberphone, media);
+        if (!whatsappContext) {
+            structuredLogger.error('API_ROUTES', 'WhatsApp context not available', {
+                numberphone,
+                correlationId: req.correlationId
+            });
+            return res.status(500).json({ error: 'WhatsApp context not available' });
         }
+        
+        // Validar que imageBuffer sea una cadena base64 válida
+        if (typeof imageBuffer !== 'string' || imageBuffer.length === 0) {
+            structuredLogger.error('API_ROUTES', 'Invalid imageBuffer provided', {
+                numberphone,
+                imageBufferType: typeof imageBuffer,
+                imageBufferLength: imageBuffer?.length || 0,
+                correlationId: req.correlationId
+            });
+            return res.status(400).json({ error: 'Invalid imageBuffer provided' });
+        }
+        
+        // Convertir el buffer base64 a Buffer
+        let buffer;
+        try {
+            buffer = Buffer.from(imageBuffer, 'base64');
+        } catch (bufferError) {
+            structuredLogger.error('API_ROUTES', 'Failed to convert base64 to buffer', bufferError, {
+                numberphone,
+                imageBufferLength: imageBuffer.length,
+                correlationId: req.correlationId
+            });
+            return res.status(400).json({ error: 'Invalid base64 image data' });
+        }
+        
+        structuredLogger.info('API_ROUTES', 'Buffer converted successfully', {
+            numberphone,
+            bufferSize: buffer.length,
+            correlationId: req.correlationId
+        });
+        
+        // Validar tamaño del archivo (WhatsApp tiene un límite de ~16MB)
+        const maxSizeBytes = 16 * 1024 * 1024; // 16MB
+        if (buffer.length > maxSizeBytes) {
+            structuredLogger.error('API_ROUTES', 'File size too large', {
+                numberphone,
+                bufferSize: buffer.length,
+                maxSizeBytes,
+                correlationId: req.correlationId
+            });
+            return res.status(400).json({ error: 'File size too large. Maximum size is 16MB' });
+        }
+        
+        // Crear MessageMedia usando la función de utilidad
+        let media;
+        try {
+            media = createMessageMedia(
+                mimeType || 'image/jpeg',
+                imageBuffer,
+                filename || 'image.jpg'
+            );
+        } catch (mediaError) {
+            structuredLogger.error('API_ROUTES', 'Error creating MessageMedia', mediaError, {
+                numberphone,
+                mimeType,
+                bufferSize: buffer.length,
+                correlationId: req.correlationId
+            });
+            throw new Error(`Failed to create MessageMedia: ${mediaError.message}`);
+        }
+        
+        structuredLogger.info('API_ROUTES', 'MessageMedia created successfully', {
+            numberphone,
+            mediaType: media.mimetype,
+            mediaSize: media.data.length,
+            correlationId: req.correlationId
+        });
+        
+        structuredLogger.info('API_ROUTES', 'About to send media message', {
+            numberphone,
+            mediaType: media.mimetype,
+            mediaSize: media.data.length,
+            correlationId: req.correlationId
+        });
+        
+        await whatsappContext.sendMessageMedia(numberphone, media);
+        structuredLogger.info('API_ROUTES', 'Media message sent successfully', {
+            numberphone,
+            correlationId: req.correlationId
+        });
+        
         res.status(200).json({ success: true, message: 'Message sent successfully' });
     }catch(error){
         structuredLogger.error('API_ROUTES', 'Send media message error', error, {
             numberphone,
-            pathimg,
             correlationId: req.correlationId
         });
         res.status(500).json({ error: 'Failed to send message' });
@@ -106,6 +246,95 @@ router.get('/say-hello', async(req, res)=>{
         correlationId: req.correlationId
     });
     res.status(200).json('Hello world' );
+});
+
+router.get('/whatsapp-status', async(req, res)=>{
+    try {
+        const whatsappContext = req.whatsappContext;
+        if (!whatsappContext) {
+            return res.status(500).json({ error: 'WhatsApp context not available' });
+        }
+        
+        const status = whatsappContext.getClientStatus();
+        structuredLogger.info('API_ROUTES', 'WhatsApp status request', {
+            status,
+            correlationId: req.correlationId
+        });
+        
+        res.status(200).json({
+            status,
+            hasContext: !!whatsappContext,
+            hasStrategy: !!whatsappContext.strategy
+        });
+    } catch (error) {
+        structuredLogger.error('API_ROUTES', 'WhatsApp status error', error, {
+            correlationId: req.correlationId
+        });
+        res.status(500).json({ error: 'Failed to get WhatsApp status' });
+    }
+});
+
+router.post('/whatsapp-reconnect', async(req, res)=>{
+    try {
+        const whatsappContext = req.whatsappContext;
+        if (!whatsappContext) {
+            return res.status(500).json({ error: 'WhatsApp context not available' });
+        }
+
+        structuredLogger.info('API_ROUTES', 'Manual WhatsApp reconnection requested', {
+            correlationId: req.correlationId
+        });
+
+        // Forzar reconexión
+        await whatsappContext.reconnect();
+
+        const status = whatsappContext.getClientStatus();
+        structuredLogger.info('API_ROUTES', 'Manual WhatsApp reconnection completed', {
+            status,
+            correlationId: req.correlationId
+        });
+
+        res.status(200).json({
+            message: 'Manual reconnection initiated',
+            status,
+            hasContext: !!whatsappContext
+        });
+    } catch (error) {
+        structuredLogger.error('API_ROUTES', 'Error in manual WhatsApp reconnection', error, {
+            correlationId: req.correlationId
+        });
+        res.status(500).json({ error: 'Failed to reconnect' });
+    }
+});
+
+// Endpoint para obtener información del monitoreo automático
+router.get('/whatsapp-monitoring-status', async(req, res)=>{
+    try {
+        // Esta información debería estar disponible globalmente en app.js
+        // Por ahora retornamos información básica
+        res.status(200).json({
+            message: 'WhatsApp monitoring status',
+            monitoring: {
+                enabled: true,
+                description: 'El servidor monitorea automáticamente el estado de WhatsApp cada 30 segundos',
+                autoReconnect: true,
+                maxFailures: 3,
+                monitoringInterval: '30 segundos',
+                reconnectCooldown: '1 minuto'
+            },
+            instructions: [
+                'El servidor detecta automáticamente cuando WhatsApp no está autenticado',
+                'Después de 3 fallos consecutivos, intenta reconectar automáticamente',
+                'Genera un nuevo código QR cuando es necesario',
+                'Notifica por WebSocket cuando hay cambios de estado'
+            ]
+        });
+    } catch (error) {
+        structuredLogger.error('API_ROUTES', 'Error getting monitoring status', error, {
+            correlationId: req.correlationId
+        });
+        res.status(500).json({ error: 'Failed to get monitoring status' });
+    }
 });
 
 // Endpoints de monitoreo
