@@ -32,6 +32,7 @@ class MessageHandler {
             phoneNumber,
             messageType: message.type,
             messageLength: message.body?.length || 0,
+            messageBody: message.body?.substring(0, 50) + '...',
             action: 'handle_message'
         });
 
@@ -136,17 +137,32 @@ class MessageHandler {
      * @param {Object} message - Mensaje completo
      */
     async handleChatBotSession(phoneNumber, message) {
-        structuredLogger.info('MessageHandler', `Handling chatbot session for: ${phoneNumber}`);
+        structuredLogger.info('MessageHandler', `Handling chatbot session for: ${phoneNumber}`, {
+            messageBody: message.body?.substring(0, 50) + '...'
+        });
 
         const session = this.sessionManager.getSession(phoneNumber);
+        structuredLogger.info('MessageHandler', `Session retrieved`, {
+            phoneNumber,
+            sessionStage: session.stage,
+            currentMenu: session.currentMenu,
+            hasMenu: !!session.menu
+        });
+        
         let responseMessage = '';
 
         if (!session.currentMenu) {
             // Inicializar menú principal
+            structuredLogger.info('MessageHandler', `Initializing main menu for: ${phoneNumber}`);
             session.currentMenu = 'mainMenu';
             session.menu = this.menuManager.getMenu('mainMenu');
             const textMenu = this.menuManager.getMenu('mainMenu').text;
             responseMessage = await interpolate(textMenu, { name_client: 'amig@' });
+            structuredLogger.info('MessageHandler', `Main menu initialized`, {
+                phoneNumber,
+                responseLength: responseMessage.length,
+                responsePreview: responseMessage.substring(0, 100) + '...'
+            });
         } else {
             // Procesar menú actual
             responseMessage = await this.processCurrentMenu(session, message);
@@ -154,6 +170,12 @@ class MessageHandler {
 
         // Enviar respuesta (solo una vez)
         if (responseMessage !== '') {
+            structuredLogger.info('MessageHandler', `Preparing to send response`, {
+                phoneNumber,
+                responseLength: responseMessage.length,
+                hasWhatsAppClient: !!this.whatsappClient
+            });
+            
             try {
                 // Intentar enviar el mensaje una sola vez
                 await this.whatsappClient.sendMessage(phoneNumber, responseMessage);

@@ -91,7 +91,11 @@ class WhatsAppBotRefactored {
      */
     async handleMessage(message) {
         try {
-            structuredLogger.info('WhatsAppBotRefactored', `Handling message from: ${message.from}`);
+            structuredLogger.info('WhatsAppBotRefactored', `Handling message from: ${message.from}`, {
+                messageBody: message.body?.substring(0, 50) + '...',
+                hasMessageHandler: !!this.messageHandler,
+                hasWhatsAppClient: !!this.whatsappClient
+            });
             await this.messageHandler.handleMessage(message);
         } catch (error) {
             structuredLogger.error('WhatsAppBotRefactored', `Error handling message: ${error.message}`, error, {
