@@ -41,7 +41,7 @@ async function interpolate(template, vars) {
     const matches = [...template.matchAll(/{\$\$(\w+)}/g)];
     for(const match of matches){
         const [placeholder, key] = match;
-        const value = await vars[key];
+        const value = vars[key];
         template = template.replace(placeholder, value || placeholder);
     }
     return template;
