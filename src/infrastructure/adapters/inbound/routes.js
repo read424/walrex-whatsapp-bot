@@ -505,4 +505,92 @@ router.post('/typing', (req, res) => {
     }
 });
 
+/**
+ * Endpoint para calcular el tipo de cambio de trading
+ * GET /calculate-trade-exchange
+ * Body: { currency_base, currency_quote, amount }
+ */
+router.get('/calculate-trade-exchange', async (req, res) => {
+    try {
+        const { currency_base, currency_quote, amount } = req.body;
+        
+        structuredLogger.info('API_ROUTES', 'Calculate trade exchange request', {
+            currency_base,
+            currency_quote,
+            amount,
+            correlationId: req.correlationId
+        });
+        
+        // Validar parámetros requeridos
+        if (!currency_base || !currency_quote || !amount) {
+            return res.status(400).json({
+                success: false,
+                message: 'currency_base, currency_quote y amount son requeridos'
+            });
+        }
+        
+        // Validar que las monedas sean códigos ISO 4217 válidos (3 caracteres)
+        const iso4217Regex = /^[A-Z]{3}$/;
+        if (!iso4217Regex.test(currency_base)) {
+            return res.status(400).json({
+                success: false,
+                message: 'currency_base debe ser un código ISO 4217 válido (3 caracteres)'
+            });
+        }
+        
+        if (!iso4217Regex.test(currency_quote)) {
+            return res.status(400).json({
+                success: false,
+                message: 'currency_quote debe ser un código ISO 4217 válido (3 caracteres)'
+            });
+        }
+        
+        // Validar que amount sea un número decimal válido
+        const amountNum = parseFloat(amount);
+        if (isNaN(amountNum) || amountNum <= 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'amount debe ser un número decimal válido mayor a 0'
+            });
+        }
+        
+        // TODO: Implementar lógica de cálculo de tipo de cambio
+        // Por ahora retornamos una respuesta de ejemplo
+        const mockExchangeRate = 1.25; // Tipo de cambio de ejemplo
+        const calculatedAmount = amountNum * mockExchangeRate;
+        
+        const response = {
+            success: true,
+            data: {
+                currency_base,
+                currency_quote,
+                original_amount: amountNum,
+                exchange_rate: mockExchangeRate,
+                calculated_amount: calculatedAmount,
+                timestamp: new Date().toISOString()
+            }
+        };
+        
+        structuredLogger.info('API_ROUTES', 'Calculate trade exchange successful', {
+            currency_base,
+            currency_quote,
+            amount: amountNum,
+            exchange_rate: mockExchangeRate,
+            calculated_amount: calculatedAmount,
+            correlationId: req.correlationId
+        });
+        
+        res.status(200).json(response);
+        
+    } catch (error) {
+        structuredLogger.error('API_ROUTES', 'Calculate trade exchange error', error, {
+            correlationId: req.correlationId
+        });
+        res.status(500).json({
+            success: false,
+            message: 'Error al calcular el tipo de cambio'
+        });
+    }
+});
+
 module.exports = router;
