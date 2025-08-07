@@ -32,6 +32,13 @@ class WebSocketAdapter extends WebSocketPort {
     emit(event, data){
         this.io.emit(event, data);
     }
+
+    // Método para enviar mensajes a todos los clientes conectados
+    broadcast(message) {
+        if (this.io) {
+            this.io.emit('whatsapp_status_update', message);
+        }
+    }
 }
 
 module.exports = WebSocketAdapter;
