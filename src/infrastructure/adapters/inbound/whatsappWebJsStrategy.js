@@ -1,10 +1,13 @@
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const WhatsAppBotRefactored = require('../../../application/WhatsAppBotRefactored');
+const WhatsAppAdministrator = require('../../../application/WhatsAppAdministrator');
 const qrcode = require('qrcode-terminal');
 const QRCode = require("qrcode")
 const structuredLogger = require('../../config/StructuredLogger');
 const { PHONE_PATTERNS } = require('../../../domain/constants/WhatsAppConstants');
 const path = require('path');
+const CustomerService = require('../outbound/customerService');
+const TradingAdapter = require('../outbound/TradingAdapter');
 // Logger ya no necesario, usando structuredLogger directamente
 
 const WhatsAppInterface = require('../../../../whatsAppInterface');
@@ -36,6 +39,7 @@ class WhatsAppWebJsStrategy extends WhatsAppInterface {
         });
         this.isLoggedIn = false;
         this.whatsAppBot = null; // Se inicializará después
+        this.whatsAppAdmin = null; // Se inicializará después
         this.currentQR = null; // Para almacenar el QR actual
     }
 
@@ -317,7 +321,7 @@ class WhatsAppWebJsStrategy extends WhatsAppInterface {
                 // Filtrar mensajes no deseados
                 if (message.from === PHONE_PATTERNS.STATUS_BROADCAST || 
                     message.from.endsWith(PHONE_PATTERNS.GROUP_CHAT_SUFFIX) || 
-                    !message.from.includes('51913061289@c.us')) {
+                    (!message.from.includes('51913061289@c.us') && !message.from.includes('51935926562@c.us'))) {
                     structuredLogger.debug('WhatsAppWebJsStrategy', 'Message filtered out', {
                         messageFrom: message.from,
                         reason: 'filtered'
@@ -344,20 +348,44 @@ class WhatsAppWebJsStrategy extends WhatsAppInterface {
         structuredLogger.info('WhatsAppWebJsStrategy', `handleIncomingMessage called`, {
             messageFrom: message.from,
             messageBody: message.body,
-            hasWhatsAppBot: !!this.whatsAppBot
+            hasWhatsAppBot: !!this.whatsAppBot,
+            isAdminMessage: message.from.includes('51935926562@c.us')
         });
         
         try{
-            // Verificar si whatsAppBot está inicializado
-            if (!this.whatsAppBot) {
-                structuredLogger.warn('WhatsAppWebJsStrategy', 'WhatsAppBot not initialized yet, initializing now', {
-                    messageFrom: message.from
-                });
-                const CustomerService = require('../outbound/customerService');
-                this.whatsAppBot = new WhatsAppBotRefactored(new CustomerService());
-                this.whatsAppBot.setWhatsAppClient(this);
+            // Determinar si es un mensaje de administrador
+            const isAdminMessage = message.from.includes('51935926562@c.us');
+            
+            if (isAdminMessage) {
+                // Manejar mensaje de administrador
+                if (!this.whatsAppAdmin) {
+                    structuredLogger.info('WhatsAppWebJsStrategy', 'Initializing WhatsAppAdministrator for admin message', {
+                        messageFrom: message.from
+                    });
+                    
+                    // Crear instancia de TradingAdapter con dependencias
+                    const ExchangeRateRepositoryAdapter = require('../outbound/ExchangeRateRepositoryAdapter');
+                    const BinanceAPIAdapter = require('../outbound/BinanceAPIAdapter');
+                    const exchangeRateRepository = new ExchangeRateRepositoryAdapter();
+                    const binanceApi = new BinanceAPIAdapter();
+                    const tradingAdapter = new TradingAdapter(exchangeRateRepository, binanceApi);
+                    
+                    this.whatsAppAdmin = new WhatsAppAdministrator(new CustomerService(), tradingAdapter);
+                    this.whatsAppAdmin.setWhatsAppClient(this);
+                }
+                await this.whatsAppAdmin.handleMessage(message);
+            } else {
+                // Manejar mensaje de usuario normal
+                if (!this.whatsAppBot) {
+                    structuredLogger.warn('WhatsAppWebJsStrategy', 'WhatsAppBot not initialized yet, initializing now', {
+                        messageFrom: message.from
+                    });
+                    
+                    this.whatsAppBot = new WhatsAppBotRefactored(new CustomerService());
+                    this.whatsAppBot.setWhatsAppClient(this);
+                }
+                await this.whatsAppBot.handleMessage(message);
             }
-            await this.whatsAppBot.handleMessage(message);
         }catch(error){
             structuredLogger.error('WhatsAppWebJsStrategy', 'Error handling incoming message', error, {
                 messageFrom: message.from,
@@ -391,7 +419,8 @@ class WhatsAppWebJsStrategy extends WhatsAppInterface {
         return {
             hasClient: !!this.client,
             isLoggedIn: this.isLoggedIn,
-            hasWhatsAppBot: !!this.whatsAppBot
+            hasWhatsAppBot: !!this.whatsAppBot,
+            hasWhatsAppAdmin: !!this.whatsAppAdmin
         };
     }
 
