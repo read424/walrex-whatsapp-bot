@@ -62,9 +62,9 @@ src/models/
 run-before-restore-erp.sh
 notas.txt
 
-# Migration and seeders (if not needed in version control)
-migrations/
-seeders/
+# Migration and seeders (MANTENER EN VERSIONADO - CRÍTICO PARA BD)
+# migrations/  # NO IGNORAR - Necesario para evolución del esquema
+# seeders/     # NO IGNORAR - Necesario para datos iniciales
 
 # NVM
 .nvm
