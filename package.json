@@ -43,7 +43,14 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node app.js",
     "start:dev": "kill-port 3330 && nodemon app.js",
-    "migrate": "npx sequelize-cli db:migrate --config ./config/config.js"
+    "migrate": "npx sequelize-cli db:migrate --config ./config/config.js",
+    "db:status": "npx sequelize-cli db:status --config ./config/config.js",
+    "db:migrate": "npx sequelize-cli db:migrate --config ./config/config.js",
+    "db:undo": "npx sequelize-cli db:migrate:undo --config ./config/config.js",
+    "db:undo:all": "npx sequelize-cli db:migrate:undo:all --config ./config/config.js",
+    "dev:migrate": "NODE_ENV=development npm run db:migrate",
+    "dev:status": "NODE_ENV=development npm run db:status",
+    "dev:undo": "NODE_ENV=development npm run db:undo"
   },
   "keywords": [],
   "author": "",
