@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WhatsApp QR Code</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            padding: 20px;
+            background-color: #f0f0f0;
+        }
+        .container {
+            max-width: 400px;
+            margin: 0 auto;
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .qr-container {
+            margin: 20px 0;
+        }
+        .qr-image {
+            max-width: 300px;
+            border: 2px solid #25D366;
+            border-radius: 10px;
+        }
+        .instructions {
+            margin: 20px 0;
+            color: #666;
+        }
+        .status {
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+        .status.loading {
+            background-color: #fff3cd;
+            color: #856404;
+        }
+        .status.error {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .status.success {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .refresh-btn {
+            background-color: #25D366;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        .refresh-btn:hover {
+            background-color: #128C7E;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔐 WhatsApp QR Code</h1>
+        <div class="instructions">
+            <p>Escanea este código QR con tu WhatsApp para conectar el bot</p>
+        </div>
+        
+        <div id="status" class="status loading">
+            Cargando QR code...
+        </div>
+        
+        <div id="qr-container" class="qr-container" style="display: none;">
+            <img id="qr-image" class="qr-image" alt="WhatsApp QR Code">
+        </div>
+        
+        <button id="refresh-btn" class="refresh-btn" onclick="loadQR()" style="display: none;">
+            🔄 Recargar QR
+        </button>
+    </div>
+
+    <script>
+        async function loadQR() {
+            const statusDiv = document.getElementById('status');
+            const qrContainer = document.getElementById('qr-container');
+            const qrImage = document.getElementById('qr-image');
+            const refreshBtn = document.getElementById('refresh-btn');
+            
+            statusDiv.className = 'status loading';
+            statusDiv.textContent = 'Cargando QR code...';
+            qrContainer.style.display = 'none';
+            refreshBtn.style.display = 'none';
+            
+            try {
+                const response = await fetch('/api/qr');
+                const data = await response.json();
+                
+                if (data.success && data.qr) {
+                    qrImage.src = data.qr;
+                    qrContainer.style.display = 'block';
+                    statusDiv.className = 'status success';
+                    statusDiv.textContent = '✅ QR Code disponible - Escanea con tu WhatsApp';
+                    refreshBtn.style.display = 'block';
+                } else {
+                    statusDiv.className = 'status error';
+                    statusDiv.textContent = data.message || '❌ No se pudo obtener el QR';
+                    refreshBtn.style.display = 'block';
+                }
+            } catch (error) {
+                statusDiv.className = 'status error';
+                statusDiv.textContent = '❌ Error al cargar el QR: ' + error.message;
+                refreshBtn.style.display = 'block';
+            }
+        }
+        
+        // Cargar QR al iniciar la página
+        loadQR();
+        
+        // Recargar QR cada 30 segundos
+        setInterval(loadQR, 30000);
+    </script>
+</body>
+</html> 
