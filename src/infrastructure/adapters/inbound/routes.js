@@ -1,4 +1,6 @@
-const { RegistryPackageService } = require('../../../domain/service');
+const { RegistryPackageService, TradingService } = require('../../../domain/service');
+const { CalculateTradeExchangeUseCase } = require('../../../application/usecases');
+const { TradingPort } = require('../../../application/ports/output');
 const { MessageMedia } = require('whatsapp-web.js');
 const express = require('express');
 const structuredLogger = require('../../config/StructuredLogger');
@@ -8,6 +10,11 @@ const fs = require('fs');
 const router = express.Router();
 
 const packageService = new RegistryPackageService();
+
+// TODO: Inicializar el adaptador de trading cuando se implemente
+// const tradingAdapter = new TradingAdapter();
+// const tradingService = new TradingService(tradingAdapter);
+// const calculateTradeExchangeUseCase = new CalculateTradeExchangeUseCase(tradingService);
 
 /**
  * Función de utilidad para crear un objeto MessageMedia de manera robusta
@@ -554,7 +561,13 @@ router.get('/calculate-trade-exchange', async (req, res) => {
             });
         }
         
-        // TODO: Implementar lógica de cálculo de tipo de cambio
+        // TODO: Implementar con el caso de uso cuando se complete el adaptador
+        // const result = await calculateTradeExchangeUseCase.execute({
+        //     currencyBase: currency_base,
+        //     currencyQuote: currency_quote,
+        //     amount: amountNum
+        // });
+        
         // Por ahora retornamos una respuesta de ejemplo
         const mockExchangeRate = 1.25; // Tipo de cambio de ejemplo
         const calculatedAmount = amountNum * mockExchangeRate;
@@ -590,6 +603,60 @@ router.get('/calculate-trade-exchange', async (req, res) => {
             success: false,
             message: 'Error al calcular el tipo de cambio'
         });
+    }
+});
+
+/**
+ * POST /create-exchange-trading
+ * Body: { currency_base, currency_quote, amount, asset }
+ */
+router.post('/create-exchange-trading', async (req, res) => {
+    const { currency_base, currency_quote, amount, asset } = req.body || {};
+    try {
+        structuredLogger.info('API_ROUTES', 'Create exchange trading request', {
+            currency_base, currency_quote, amount, asset, correlationId: req.correlationId
+        });
+
+        // Validaciones básicas
+        const iso = /^[A-Z]{3}$/;
+        if (!iso.test(currency_base) || !iso.test(currency_quote)) {
+            return res.status(400).json({ success: false, message: 'currency_base y currency_quote deben ser ISO 4217' });
+        }
+        const parsedAmount = Number(amount);
+        if (!parsedAmount || parsedAmount <= 0) {
+            return res.status(400).json({ success: false, message: 'amount debe ser decimal > 0' });
+        }
+        if (!asset || typeof asset !== 'string') {
+            return res.status(400).json({ success: false, message: 'asset es requerido' });
+        }
+
+// Composition root (simple) para inyección de dependencias
+const { TradingAdapter, ExchangeRateRepositoryAdapter } = require('../outbound');
+const BankTradeRepositoryAdapter = require('../outbound/BankTradeRepositoryAdapter');
+const BinanceAPIAdapter = require('../outbound/BinanceAPIAdapter');
+const { TradingService } = require('../../../domain/service');
+const { CreateExchangeTradingUseCase } = require('../../../application/usecases');
+
+function buildCreateExchangeTradingUseCase() {
+    const exchangeRateRepository = new ExchangeRateRepositoryAdapter();
+    const binanceApi = new BinanceAPIAdapter();
+    const tradingAdapter = new TradingAdapter(exchangeRateRepository, binanceApi);
+    const tradingService = new TradingService(tradingAdapter);
+    const bankTradeRepo = new BankTradeRepositoryAdapter();
+    return new CreateExchangeTradingUseCase(tradingService, bankTradeRepo);
+}
+
+        const useCase = buildCreateExchangeTradingUseCase();
+        const result = await useCase.execute({
+            currencyBase: currency_base,
+            currencyQuote: currency_quote,
+            amount: parsedAmount,
+            asset
+        });
+        return res.status(200).json({ success: true, data: result });
+    } catch (error) {
+        structuredLogger.error('API_ROUTES', 'Create exchange trading error', error, { correlationId: req.correlationId });
+        return res.status(500).json({ success: false, message: error.message || 'Error interno' });
     }
 });
 
