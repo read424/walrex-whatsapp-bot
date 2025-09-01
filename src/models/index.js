@@ -14,6 +14,7 @@ const TypeAccountBank = require('./type_account_bank.model');
 const TradingCurrencies = require('./tradingCurrencies.model');
 const UserType = require('./UserType.model');
 const WhatsAppConnection = require('./WhatsAppConnection');
+const Connection = require('./Connection.model');
 
 module.exports = {
     Customer,
@@ -31,5 +32,6 @@ module.exports = {
     TypeAccountBank,
     TradingCurrencies,
     UserType,
+    Connection,
     WhatsAppConnection
 };
