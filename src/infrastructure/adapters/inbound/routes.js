@@ -75,6 +75,53 @@ router.use((req, res, next) => {
     next();
 });
 
+router.post('/whatsapp/connect', async (req, res)=>{
+    try{
+        const {connectionId, tenantId, connectionName, departament } = req.body;
+        
+        structuredLogger.info('API_ROUTES', 'Creating new WhatsApp connection', {
+            connectionId,
+            tenantId,
+            connectionName,
+            departament,
+            correlationId: req.correlationId
+        });
+
+        const result = await req.connectionManager.createNewConnection(connectionId, connectionName, tenantId);
+        res.json(result);
+    }catch(error){
+        structuredLogger.error('API_ROUTES', 'Error creating WhatsApp connection', error, {
+            connectionName: req.body?.connectionName,
+            connectionId: req.body?.connectionId,
+            correlationId: req.correlationId
+        });
+        res.status(500).json({ error: error.message || 'Failed to create new connection' });
+    }
+});
+
+// Endpoint para obtener información de tenants activos
+router.get('/whatsapp/tenants-info', async (req, res) => {
+    try {
+        const tenantsInfo = req.webSocketAdapter.getTenantsInfo();
+        
+        structuredLogger.info('API_ROUTES', 'Tenants info requested', {
+            totalTenants: Object.keys(tenantsInfo).length,
+            correlationId: req.correlationId
+        });
+
+        res.json({
+            totalTenants: Object.keys(tenantsInfo).length,
+            tenants: tenantsInfo,
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        structuredLogger.error('API_ROUTES', 'Error getting tenants info', error, {
+            correlationId: req.correlationId
+        });
+        res.status(500).json({ error: 'Failed to get tenants information' });
+    }
+});
+
 router.post('/registry-package-name', async(req, res)=>{
     const { package, title, message } = req.body;
     try{
@@ -630,21 +677,21 @@ router.post('/create-exchange-trading', async (req, res) => {
             return res.status(400).json({ success: false, message: 'asset es requerido' });
         }
 
-// Composition root (simple) para inyección de dependencias
-const { TradingAdapter, ExchangeRateRepositoryAdapter } = require('../outbound');
-const BankTradeRepositoryAdapter = require('../outbound/BankTradeRepositoryAdapter');
-const BinanceAPIAdapter = require('../outbound/BinanceAPIAdapter');
-const { TradingService } = require('../../../domain/service');
-const { CreateExchangeTradingUseCase } = require('../../../application/usecases');
+        // Composition root (simple) para inyección de dependencias
+        const { TradingAdapter, ExchangeRateRepositoryAdapter } = require('../outbound');
+        const BankTradeRepositoryAdapter = require('../outbound/BankTradeRepositoryAdapter');
+        const BinanceAPIAdapter = require('../outbound/BinanceAPIAdapter');
+        const { TradingService } = require('../../../domain/service');
+        const { CreateExchangeTradingUseCase } = require('../../../application/usecases');
 
-function buildCreateExchangeTradingUseCase() {
-    const exchangeRateRepository = new ExchangeRateRepositoryAdapter();
-    const binanceApi = new BinanceAPIAdapter();
-    const tradingAdapter = new TradingAdapter(exchangeRateRepository, binanceApi);
-    const tradingService = new TradingService(tradingAdapter);
-    const bankTradeRepo = new BankTradeRepositoryAdapter();
-    return new CreateExchangeTradingUseCase(tradingService, bankTradeRepo);
-}
+        function buildCreateExchangeTradingUseCase() {
+            const exchangeRateRepository = new ExchangeRateRepositoryAdapter();
+            const binanceApi = new BinanceAPIAdapter();
+            const tradingAdapter = new TradingAdapter(exchangeRateRepository, binanceApi);
+            const tradingService = new TradingService(tradingAdapter);
+            const bankTradeRepo = new BankTradeRepositoryAdapter();
+            return new CreateExchangeTradingUseCase(tradingService, bankTradeRepo);
+        }
 
         const useCase = buildCreateExchangeTradingUseCase();
         const result = await useCase.execute({
