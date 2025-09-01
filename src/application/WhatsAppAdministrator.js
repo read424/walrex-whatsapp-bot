@@ -2,7 +2,7 @@ const structuredLogger = require('../infrastructure/config/StructuredLogger');
 const TradingAdapter = require('../infrastructure/adapters/outbound/TradingAdapter');
 
 // Modelos de base de datos
-const { TradingCurrencies, Currency, BankTrade, Bank, Country, PriceExchange } = require('../../../models');
+const { TradingCurrencies, Currency, BankTrade, Bank, Country, PriceExchange } = require('../models');
 
 class WhatsAppAdministrator {
     constructor(customerService = null, tradingAdapter = null) {
@@ -234,7 +234,8 @@ class WhatsAppAdministrator {
 
             structuredLogger.info('WhatsAppAdministrator', 'Trading currencies with banks retrieved from DB', {
                 count: tradingConfigWithBanks.length,
-                idCompany: idCompany
+                idCompany: idCompany,
+                tradingConfigWithBanks: tradingConfigWithBanks
             });
 
             return tradingConfigWithBanks;
