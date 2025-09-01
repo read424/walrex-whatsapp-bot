@@ -40,7 +40,9 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
     "start": "node app.js",
     "start:dev": "kill-port 3330 && nodemon app.js",
     "migrate": "npx sequelize-cli db:migrate --config ./config/config.js",
@@ -57,6 +59,7 @@
   "license": "ISC",
   "description": "",
   "devDependencies": {
+    "jest": "^29.7.0",
     "kill-port": "^2.0.1",
     "nodemon": "^3.1.7"
   }
