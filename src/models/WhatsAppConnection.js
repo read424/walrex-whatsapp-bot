@@ -1,5 +1,6 @@
 const { Model, DataTypes, Op } = require('sequelize');
 const sequelize = require('../infrastructure/config/DatabaseConfig');
+const Connection = require('./Connection.model');
 
 class WhatsAppConnection extends Model {}
 
@@ -135,5 +136,20 @@ WhatsAppConnection.cleanupOldSessions = async function(daysOld = 7) {
             }
     });
 };
+
+// Establecer la relación
+WhatsAppConnection.belongsTo(Connection, {
+    as: 'connection',
+    foreignKey: 'connection_id',
+    constraints: true,
+    targetKey: 'id'
+});
+
+Connection.hasOne(WhatsAppConnection, {
+    as: 'whatsapp_details',
+    foreignKey: 'connection_id',
+    constraints: true,
+    sourceKey: 'id'
+});
 
 module.exports = WhatsAppConnection;
