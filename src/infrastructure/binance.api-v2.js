@@ -366,6 +366,8 @@ const delay = ms => new Promise(res => setTimeout(res, ms));
 
 const binanceAPI = new BinanceAPI();
 
+// CÓDIGO COMENTADO - Se ejecutaba automáticamente al importar
+/*
 (async ()=> {    
     try{
         
@@ -741,5 +743,6 @@ const binanceAPI = new BinanceAPI();
     }
 
 })();
+*/
 
 module.exports = BinanceAPI;
