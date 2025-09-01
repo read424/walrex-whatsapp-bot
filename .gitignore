@@ -44,9 +44,6 @@ Thumbs.db
 # Test files
 src/test/
 
-# Models (if they contain sensitive data)
-src/models/
-
 # Database files
 *.db
 *.db-journal
@@ -68,3 +65,8 @@ notas.txt
 
 # NVM
 .nvm
+
+# Image files - State screenshots
+src/img/state_*.jpeg
+src/img/state_*.jpg
+src/img/state_*.png
