@@ -1,4 +1,4 @@
-const { PackagesName } = require('./');
+const { PackagesName } = require('./PackagesName.entity');
 const structuredLogger = require('../../config/StructuredLogger');
 // Logger ya no necesario, usando structuredLogger directamente
 

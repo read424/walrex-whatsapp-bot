@@ -7,17 +7,15 @@ const fs = require('fs').promises;
 const path = require('path');
 const { JSDOM } = require('jsdom');
 const sharp = require('sharp');
-const { BinanceApiPort } = require('./adapters/outbound');
 
 const limiter = new Bottleneck({
     minTime: 300,
     maxConcurrent: 2
 });
 
-class BinanceAPI extends BinanceApiPort {
+class BinanceAPI {
 
     constructor(){
-        super();
         this.requestQueue = [];
         this.isProcessing = false;
         this.consecutiveErrors = 0;
@@ -133,7 +131,7 @@ class BinanceAPI extends BinanceApiPort {
         }
     }
     
-    async getTradingPairs(type_trade, currency_base, currency_quote, mount_account, options_type_pay, retryCount = 0) {
+    async getTradingPairs(type_trade, currency_base, currency_quote, mount_account, options_type_pay, transCrypto = false, retryCount = 0) {
         const maxRetries = 3;
 
         const requestFn = async () => {
@@ -158,7 +156,9 @@ class BinanceAPI extends BinanceApiPort {
                     "rows": 10,
                     "shieldMerchantAds": false,
                     "tradeType": type_trade || "BUY", 
-                    ...(typeof jitteredAmount==='number'? {"transAmount": jitteredAmount}:{} )
+                    ...(typeof jitteredAmount==='number'? 
+                        (transCrypto ? {"transCryptoAmount": jitteredAmount} : {"transAmount": jitteredAmount})
+                        : {} )
                 };
 
                 // Usar headers dinámicos
@@ -181,7 +181,7 @@ class BinanceAPI extends BinanceApiPort {
                     if (response.data.data.length === 0) {
                         structuredLogger.warn('BinanceAPI', 'USD query returned 0 results - trying alternative approach');
                         // Intentar con parámetros diferentes para USD
-                        return await this.getUSDAlternative(type_trade, currency_base, currency_quote, mount_account, options_type_pay);
+                        return await this.getUSDAlternative(type_trade, currency_base, currency_quote, mount_account, options_type_pay, transCrypto);
                     }
                 }                
 
@@ -195,7 +195,7 @@ class BinanceAPI extends BinanceApiPort {
                 )) {
                     structuredLogger.warn('BinanceAPI', `Retry ${retryCount + 1}/${maxRetries} for ${currency_quote} after error:`, error.message);
                     await this.randomDelay(this.getBackoffDelay(retryCount + 1));
-                    return this.getTradingPairs(type_trade, currency_base, currency_quote, mount_account, options_type_pay, retryCount + 1);
+                    return this.getTradingPairs(type_trade, currency_base, currency_quote, mount_account, options_type_pay, transCrypto, retryCount + 1);
                 }
                 throw error;                
             }    
@@ -204,7 +204,7 @@ class BinanceAPI extends BinanceApiPort {
     }
 
     // Función de fallback para USD cuando la consulta principal falla
-    async getUSDAlternative(type_trade, currency_base, currency_quote, mount_account, options_type_pay) {
+    async getUSDAlternative(type_trade, currency_base, currency_quote, mount_account, options_type_pay, transCrypto = false) {
         structuredLogger.info('BinanceAPI', 'Trying alternative USD query with different parameters...');
         
         // Intentar con diferentes configuraciones
@@ -247,7 +247,9 @@ class BinanceAPI extends BinanceApiPort {
                     "rows": altConfig.rows,
                     "shieldMerchantAds": altConfig.shieldMerchantAds || false,
                     "tradeType": type_trade || "BUY", 
-                    ...(typeof mount_account==='number'? {"transAmount": mount_account}:{} )
+                    ...(typeof mount_account==='number'? 
+                        (transCrypto ? {"transCryptoAmount": mount_account} : {"transAmount": mount_account})
+                        : {} )
                 };
 
                 const config = {
@@ -364,6 +366,8 @@ const delay = ms => new Promise(res => setTimeout(res, ms));
 
 const binanceAPI = new BinanceAPI();
 
+// CÓDIGO COMENTADO - Se ejecutaba automáticamente al importar
+/*
 (async ()=> {    
     try{
         
@@ -739,5 +743,6 @@ const binanceAPI = new BinanceAPI();
     }
 
 })();
+*/
 
 module.exports = BinanceAPI;

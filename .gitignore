@@ -1,6 +1,9 @@
 # Logs
 src/infrastructure/logs/
+src/infrastructure/logs/*
 *.log
+*.audit.json
+logs/
 
 # Session files
 src/session-whatsappweb/
@@ -8,6 +11,11 @@ src/session.json
 whatsappContext.js
 whatsappContextSingleton.js
 whatsAppInterface.js
+
+# WhatsApp cache and tokens
+.wwebjs_cache/
+src/infrastructure/tokens/
+src/tokens/
 
 # Temporary files
 *.tmp
@@ -36,12 +44,29 @@ Thumbs.db
 # Test files
 src/test/
 
-# Models (if they contain sensitive data)
-src/models/
+# Database files
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# Environment and configuration
+.env.development
+.env.production
+.env.staging
 
 # Scripts
 run-before-restore-erp.sh
 notas.txt
 
+# Migration and seeders (MANTENER EN VERSIONADO - CRÍTICO PARA BD)
+# migrations/  # NO IGNORAR - Necesario para evolución del esquema
+# seeders/     # NO IGNORAR - Necesario para datos iniciales
+
 # NVM
 .nvm
+
+# Image files - State screenshots
+src/img/state_*.jpeg
+src/img/state_*.jpg
+src/img/state_*.png
