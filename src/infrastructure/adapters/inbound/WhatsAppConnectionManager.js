@@ -161,11 +161,16 @@ class WhatsAppConnectionManager {
     async createNewConnection(connectionId, connectionName = null, tenantId = null) {
         try {
             const finalClientId = connectionName || this.generateClientId();
-            const finalTenantId = tenantId || 'tenant_001';
+            const finalTenantId = tenantId || 1;
             
             if (this.activeConnections.has(finalClientId)) {
                 const existingConnection = this.activeConnections.get(finalClientId);
-                if (existingConnection.connectionRecord?.status === 'connected' || existingConnection.connectionRecord?.status === 'authenticated') {
+
+                if(existingConnection.connectionRecord?.status === 'disconnected' || existingConnection.connectionRecord?.status === 'inactive'){
+                    //Limpiar la conexion existente y crear una nueva
+                    await existingConnection.strategy.cleanup?.(); 
+                    this.activeConnections.delete(finalClientId);
+                }else if (existingConnection.connectionRecord?.status === 'connected' || existingConnection.connectionRecord?.status === 'authenticated') {
                     throw new Error(`Connection ${finalClientId} already exists with status ${existingConnection.connectionRecord?.status}`);
                 }
 
@@ -206,19 +211,11 @@ class WhatsAppConnectionManager {
                 clientId: finalClientId
             });
 
-            //this.webSocketAdapter.broadcast({
-            //    type: 'connection_created',
-            //    clientId: finalClientId,
-            //    tenantId,
-            //    activeConnections: this.activeConnections.size,
-            //    timestamp: new Date().toISOString()
-            //});
-
             return {
                 success: true,
                 clientId: finalClientId,
                 status: strategy.connectionRecord?.status || 'connecting',
-                tenantId: tenantId,
+                tenantId: finalTenantId,
                 qr: strategy.getQRCode(),
                 connectionRecord: {
                     id: connectionRecord?.id,
@@ -235,6 +232,37 @@ class WhatsAppConnectionManager {
                 connectionId,
                 tenantId
             });
+            throw error;
+        }
+    }
+
+    async restartConnection(clientId, tenantId) {
+        try {
+            if(this.activeConnections.has(clientId)){
+                const existingConnection = this.activeConnections.get(clientId);
+                await existingConnection.strategy.cleanup?.();
+                this.activeConnections.delete(clientId);
+            }
+
+            //Crear nueva conexión
+            const strategy = this.createStrategyInstance(clientId, tenantId);
+            await strategy.init();
+
+            const connectionRecord = await WhatsAppConnection.getConnectionByClientId(clientId);
+
+            this.activeConnections.set(clientId, {
+                strategy,
+                connectionRecord,
+                tenantId
+            });
+
+            return {
+                success: true,
+                clientId: clientId,
+                message: 'Connection reiniciada correctamente'
+            }
+        }catch(error){
+            structuredLogger.error('WhatsAppConnectionManager', 'Error restarting connection', error);
             throw error;
         }
     }
