@@ -20,7 +20,7 @@ Connection.init({
         comment: 'Tipo de proveedor de mensajería'
     },
     department: {
-        type: DataTypes.STRING(50),
+        type: DataTypes.INTEGER,
         allowNull: true,
         comment: 'Departamento asignado (Ventas, Marketing, etc.)'
     },
@@ -47,7 +47,7 @@ Connection.init({
         comment: 'Estado actual de la conexión'
     },
     tenant_id: {
-        type: DataTypes.STRING(50),
+        type: DataTypes.INTEGER,
         allowNull: false,
         comment: 'Identificador del tenant para multitenancy'
     },
