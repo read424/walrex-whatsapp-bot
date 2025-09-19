@@ -29,6 +29,13 @@ class WhatsAppWebJsStrategy extends WhatsAppInterface {
         this.currentQR = null; // Para almacenar el QR actual
         this.connectionRecord = null; // Registro en la base de datos
         this.sessionPath = path.join(__dirname, '../../../sessions', this.clientId);
+
+        //properties for timeout by QR
+        this.qrAttempts = 0;
+        this.maxQrAttempts = 4;
+        this.qrTimeout = null;
+        this.qrTimeoutDuration = 30000;//
+        this.isConnectionClosed = false;
     }
 
     async init(){
@@ -128,25 +135,47 @@ class WhatsAppWebJsStrategy extends WhatsAppInterface {
 
     async setupEventListeners() {
 
-        this.client.on('qr', async (qr) => { 
+        this.client.on('qr', async (qr) => {
+
+            // Si la conexion esta cerrada, no procesar mas qr
+            if(this.isConnectionClosed){
+                structuredLogger.info('WhatsAppWebJsStrategy', 'Connection closed, skipping QR processing', {
+                    clientId: this.clientId
+                });
+                return;
+            }
+
+
+            // Llamar el método que maneja el timeout
+            await this.handleQRTimeout();
+            
+            // Si se cerró por timeout, no procesar el QR
+            if (this.isConnectionClosed) return;
+
 
             qrcode.generate(qr, {small: true});
             
             structuredLogger.info('WhatsAppWebJsStrategy', 'QR Code generated - Session not found', { 
                 clientId: this.clientId,
+                attempts: this.qrAttempts,
+                maxAttempts: this.maxQrAttempts,
                 qrLength: qr.length
             });
             
             try {
                 const base64Q = await QRCode.toDataURL(qr, {type: 'image/png'});
                 this.currentQR = base64Q;
+
                 console.log('QR Code generated: ', base64Q);
 
                 // Emitir QR específicamente al tenant
                 this.webSocketAdapter.emitQRToTenant(this.tenantId, { 
                     qr: base64Q, 
-                    clientId: this.clientId
+                    clientId: this.clientId,
+                    attempts: this.qrAttempts,
+                    maxAttempts: this.maxQrAttempts
                 });
+
             } catch (error) {
                 structuredLogger.error('WhatsAppWebJsStrategy', 'Error generating QR image', error);
             }
@@ -157,6 +186,9 @@ class WhatsAppWebJsStrategy extends WhatsAppInterface {
             this.isLoggedIn = true;
             this.currentQR = null;
 
+            // Limpiar timeout y reiniciar contadores al conectarse exitosamente
+            this.resetQRAttempts();
+
             const deviceInfo = await this.getDeviceInfo();
 
             //Actualizar registro en la base de datos
@@ -166,6 +198,8 @@ class WhatsAppWebJsStrategy extends WhatsAppInterface {
                 deviceInfo: deviceInfo,
                 phoneNumber: deviceInfo?.phoneNumber || null
             });
+
+            
             await this.connectionRecord.resetConnectionAttempts();
 
             await this.saveSessionData();
@@ -199,14 +233,21 @@ class WhatsAppWebJsStrategy extends WhatsAppInterface {
 
         this.client.on('authenticated', async (session) => {
             console.log('WhatsApp event authenticated');
+            this.resetQRAttempts();
+            
             await this.updateConnectionStatus('connected');
+            
             structuredLogger.info('WhatsAppWebJsStrategy', 'Session authenticated successfully', {
                 clientId: this.clientId,
             });
 
             await this.saveSessionData();
 
-            this.webSocketAdapter.emitToTenant(this.tenantId, 'authenticated', {});
+            this.webSocketAdapter.emitToTenant(this.tenantId, 'authenticated', {
+                clientId: this.clientId,
+                tenantId: this.tenantId,
+                timestamp: new Date().toISOString()
+            });
         });
 
         this.client.on('auth_failure', async (msg) => {
@@ -764,6 +805,109 @@ class WhatsAppWebJsStrategy extends WhatsAppInterface {
                 clientId: this.clientId
             });
             throw error;
+        }
+    }
+
+    async handleQRTimeout(){
+        this.qrAttempts++;
+
+        structuredLogger.info('WhatsAppWebJsStrategy', 'QR timeout ocurred', {
+            clientId: this.clientId,
+            attempts: this.qrAttempts,
+            maxAttempts: this.maxQrAttempts
+        });
+
+        if(this.qrAttempts >= this.maxQrAttempts){
+            await this.closeConnectionDueToQRTimeout();
+        }
+    }
+
+    async closeConnectionDueToQRTimeout(){
+        try{
+            this.isConnectionClosed = true;
+
+            await this.updateConnectionStatus('disconnected', 'QR timeout occurred');
+
+            if(this.client){
+                await this.client.destroy();
+                this.client = null;
+            }
+
+            this.isLoggedIn = false;
+            this.currentQR = null;
+
+            //Emitir evento de timeout al frontend
+            this.webSocketAdapter.emitToTenant(this.tenantId, 'qrTimeout', {
+                clientId: this.clientId,
+                tenantId: this.tenantId,
+                attempts: this.qrAttempts,
+                maxAttempts: this.maxQrAttempts,
+                message: 'Se alcanzo el maximo de intentos para escanear el QR',
+                timestamp: new Date().toISOString()
+            });
+
+            structuredLogger.info('WhatsAppWebJsStrategy', 'Connection closed due to QR timeout', {
+                clientId: this.clientId,
+                attempts: this.qrAttempts
+            });
+
+        }catch(error){
+            structuredLogger.error('WhatsAppWebJsStrategy', 'Error closing connection due to QR timeout', error, {
+                clientId: this.clientId,
+                attempts: this.qrAttempts
+            });
+        }
+    }
+
+    resetQRAttempts() {
+        this.qrAttempts = 0;
+        this.isConnectionClosed = false;
+        
+        if (this.qrTimeout) {
+            clearTimeout(this.qrTimeout);
+            this.qrTimeout = null;
+        }
+    }
+
+    async restartConnection(){
+        try {
+
+            structuredLogger.info('WhatsAppWebJsStrategy', 'Restarting connection manually', {
+                clientId: this.clientId
+            });
+
+            this.resetQRAttempts();
+
+            if(this.client){
+                await this.client.destroy();
+                this.client = null;
+            }
+
+            this.isLoggedIn = false;
+            this.currentQR = null;
+
+            await this.init();
+
+            structuredLogger.info('WhatsAppWebJsStrategy', 'Connection restarted completed', {
+                clientId: this.clientId
+            });
+        }catch(error){
+            structuredLogger.error('WhatsAppWebJsStrategy', 'Error restarting connection', error, {
+                clientId: this.clientId
+            });
+            throw error;
+        }
+    }
+
+    async cleanup(){
+        if(this.qrTimeout){
+            clearTimeout(this.qrTimeout);
+            this.qrTimeout = null;
+        }
+
+        if(this.client){
+            await this.client.destroy();
+            this.client = null;
         }
     }
 }
