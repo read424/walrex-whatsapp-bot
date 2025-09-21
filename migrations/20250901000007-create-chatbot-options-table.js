@@ -22,12 +22,12 @@ module.exports = {
                 onDelete: 'CASCADE'
             },
             option_text: {
-                type: Sequelize.VARCHAR(255),
+                type: Sequelize.STRING(255),
                 allowNull: false,
                 comment: 'Texto de la opción que ve el usuario (ej: "Me gustaría ver el catálogo")'
             },
             option_value: {
-                type: Sequelize.VARCHAR(100),
+                type: Sequelize.STRING(100),
                 allowNull: false,
                 comment: 'Valor interno para lógica del sistema'
             },
