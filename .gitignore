@@ -14,6 +14,7 @@ whatsAppInterface.js
 
 # WhatsApp cache and tokens
 .wwebjs_cache/
+.wwebjs_auth/
 src/infrastructure/tokens/
 src/tokens/
 
@@ -66,7 +67,9 @@ notas.txt
 # NVM
 .nvm
 
-# Image files - State screenshots
-src/img/state_*.jpeg
-src/img/state_*.jpg
-src/img/state_*.png
+# Session directories
+src/session/
+
+# Image files - Ignore all except last-design.svg
+src/img/*
+!src/img/last-design.svg
