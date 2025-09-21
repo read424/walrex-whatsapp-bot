@@ -1,6 +1,7 @@
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const WhatsAppBotRefactored = require('../../../application/WhatsAppBotRefactored');
 const WhatsAppAdministrator = require('../../../application/WhatsAppAdministrator');
+const ChatService = require('../../../domain/service/ChatService');
 const qrcode = require('qrcode-terminal');
 const QRCode = require("qrcode")
 const structuredLogger = require('../../config/StructuredLogger');
@@ -36,6 +37,9 @@ class WhatsAppWebJsStrategy extends WhatsAppInterface {
         this.qrTimeout = null;
         this.qrTimeoutDuration = 30000;//
         this.isConnectionClosed = false;
+
+        // ChatService
+        this.chatService = new ChatService(webSocket);
     }
 
     async init(){
@@ -105,6 +109,7 @@ class WhatsAppWebJsStrategy extends WhatsAppInterface {
                 this.connectionRecord = await WhatsAppConnection.create({
                     clientId: this.clientId,
                     tenantId: this.tenantId,
+                    connectionId: this.connectionId,
                     status: 'disconnected',
                     settings: {
                         autoReconnect: true,
@@ -114,9 +119,19 @@ class WhatsAppWebJsStrategy extends WhatsAppInterface {
 
                 structuredLogger.info('WhatsAppWebJsStrategy', 'New connection record created', {
                     clientId: this.clientId,
-                    tenantId: this.tenantId
+                    tenantId: this.tenantId,
+                    connectionId: this.connectionId
                 });
             }else{
+                if(!this.connectionRecord.connectionId && this.connectionId){
+                    this.connectionRecord.connectionId = this.connectionId;
+                    await this.connectionRecord.save();
+
+                    structuredLogger.info('WhatsAppWebJsStrategy', 'Updated existing record with connectionId', {
+                        clientId: this.clientId,
+                        connectionId: this.connectionId
+                    });
+                }
                 structuredLogger.info('WhatsAppWebJsStrategy', 'Existing connection record found', {
                     clientId: this.clientId,
                     connectionId: this.connectionRecord.id,
@@ -302,6 +317,7 @@ class WhatsAppWebJsStrategy extends WhatsAppInterface {
         });
 
         this.listenMessages();
+        this.setupMessageStatusListeners();
     }
 
     async clearSession(){
@@ -707,6 +723,19 @@ class WhatsAppWebJsStrategy extends WhatsAppInterface {
                 }
                 await this.whatsAppAdmin.handleMessage(message);
             } else {
+
+                const chatData = await this.chatService.processIncomingMessage(
+                    message, 
+                    this.connectionRecord.id, 
+                    this.tenantId
+                );
+
+                structuredLogger.info('WhatsAppWebJsStrategy', 'Message saved to database', {
+                    messageId: chatData.message.id,
+                    sessionId: chatData.chatSession.id,
+                    contactPhone: chatData.contact.phoneNumber
+                });
+                
                 // Manejar mensaje de usuario normal
                 if (!this.whatsAppBot) {
                     structuredLogger.warn('WhatsAppWebJsStrategy', 'WhatsAppBot not initialized yet, initializing now', {
@@ -734,6 +763,43 @@ class WhatsAppWebJsStrategy extends WhatsAppInterface {
 
     async onMessage(callback){
         this.client.on('message_create', callback);
+    }
+
+    async sendMessageAndUpdate(number, message, messageType = 'text', advisorId = null){
+        try{
+            await this.sendMessage(number, message);
+
+            const contact = await this.chatService.findOrCreateContact(
+                number.replace('@c.us', ''),
+                null,
+                this.tenantId
+            );
+
+            const chatSession = await this.chatService.findOrCreateChatSession(
+                contact.id,
+                this.connectionRecord.id,
+                this.tenantId
+            );
+
+            const outgoingMessage = await this.chatService.sendOutgoingMessage(
+                chatSession.id,
+                message,
+                advisorId,
+                messageType
+            );
+
+            structuredLogger.info('WhatsAppWebJsStrategy', 'Outgoing message sent and saved', {
+                messageId: outgoingMessage.id,
+                to: number
+            });
+    
+            return outgoingMessage;
+
+        } catch(error){
+            structuredLogger.error('WhatsAppWebJsStrategy', 'Error sending message and updating DB', error);
+            throw error;
+        }
+
     }
 
     // Método para obtener el QR actual
@@ -909,6 +975,29 @@ class WhatsAppWebJsStrategy extends WhatsAppInterface {
             await this.client.destroy();
             this.client = null;
         }
+    }
+
+    setupMessageStatusListeners(){
+        this.client.on('message_ack', async (message, ack)=>{
+            try{
+                let status;
+                switch(ack){
+                    case 1: status = 1; break;// sent
+                    case 2: status = 2; break;//delivered
+                    case 3: status = 3; break;//read
+                    default: status = 0; break;//sending
+                }
+
+                await this.chatService.updateChatSessionStatus(message.id.__serialized, status);
+
+                structuredLogger.debug('WhatsAppWebJsStrategy', 'Message status updated', {
+                    messageId: message.id._serialized,
+                    status
+                });
+            }catch(error){
+                structuredLogger.error('WhatsAppWebJsStrategy', 'Error updating message status', error);
+            }
+        });
     }
 }
 
