@@ -22,27 +22,27 @@ module.exports = {
                 onDelete: 'CASCADE'
             },
             document_name: {
-                type: Sequelize.VARCHAR(255),
+                type: Sequelize.STRING(255),
                 allowNull: false,
                 comment: 'Nombre descriptivo del documento (ej: "Catálogo Productos")'
             },
             document_type: {
-                type: Sequelize.VARCHAR(50),
+                type: Sequelize.STRING(50),
                 allowNull: false,
                 comment: 'Tipo de documento: catalog, price_list, brochure, manual, etc.'
             },
             file_path: {
-                type: Sequelize.VARCHAR(500),
+                type: Sequelize.STRING(500),
                 allowNull: true,
                 comment: 'Ruta local del archivo en el servidor'
             },
             file_url: {
-                type: Sequelize.VARCHAR(500),
+                type: Sequelize.STRING(500),
                 allowNull: true,
                 comment: 'URL del archivo si está almacenado en cloud'
             },
             mime_type: {
-                type: Sequelize.VARCHAR(100),
+                type: Sequelize.STRING(100),
                 allowNull: true,
                 comment: 'Tipo MIME del archivo (ej: application/pdf, image/jpeg)'
             },

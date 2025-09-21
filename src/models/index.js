@@ -3,6 +3,7 @@ const TypeDocumentId = require('./typedocument.model');
 const Advisor = require('./advisor.model');
 const ChatSession = require('./chatSession.model');
 const ChatMessage = require('./chatMessage.model');
+const Contact = require('./contact.model');
 const User = require('./user.model');
 const InviteReferral = require('./inviteReferral.model');
 const Country = require('./country.model');
@@ -16,12 +17,14 @@ const UserType = require('./UserType.model');
 const WhatsAppConnection = require('./WhatsAppConnection');
 const Connection = require('./Connection.model');
 
-module.exports = {
+// Definir las relaciones entre modelos
+const models = {
     Customer,
     TypeDocumentId,
     Advisor,
     ChatSession,
     ChatMessage,
+    Contact,
     User,
     InviteReferral,
     Country,
@@ -35,3 +38,12 @@ module.exports = {
     Connection,
     WhatsAppConnection
 };
+
+// Establecer las asociaciones
+Object.keys(models).forEach(modelName => {
+    if (models[modelName].associate) {
+        models[modelName].associate(models);
+    }
+});
+
+module.exports = models;

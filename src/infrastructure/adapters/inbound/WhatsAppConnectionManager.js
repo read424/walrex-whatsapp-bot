@@ -196,15 +196,32 @@ class WhatsAppConnectionManager {
                 tenantId: finalTenantId
             });
 
+            const connectionRecord = await Connection.findOne({
+                where: {
+                    id: connectionId,
+                    tenant_id: finalTenantId,
+                    is_active: true
+                }
+            });
+
+            if(!connectionRecord){
+                throw new Error(`Connection with ID ${finalClientId} not found`);
+            }
+
             const strategy = this.createStrategyInstance(finalClientId, finalTenantId);
+
+            strategy.connectionRecord = connectionRecord.id;
+
             await strategy.init();
 
-            const connectionRecord = await WhatsAppConnection.getConnectionByClientId(finalClientId);
+            await connectionRecord.updateStatus('connecting');
+
+            const whatsappConnectionRecord = await WhatsAppConnection.getConnectionByClientId(finalClientId);
 
             this.activeConnections.set(finalClientId, {
                 strategy,
-                connectionRecord,
-                tenantId
+                connectionRecord: whatsappConnectionRecord,
+                tenantId: finalTenantId
             });
 
             structuredLogger.info('WhatsAppConnectionManager', 'New connection created', {
@@ -218,11 +235,11 @@ class WhatsAppConnectionManager {
                 tenantId: finalTenantId,
                 qr: strategy.getQRCode(),
                 connectionRecord: {
-                    id: connectionRecord?.id,
-                    clientId: connectionRecord?.clientId,
-                    status: connectionRecord?.status,
-                    createdAt: connectionRecord?.createdAt,
-                    updatedAt: connectionRecord?.updatedAt
+                    id: whatsappConnectionRecord?.id,
+                    clientId: whatsappConnectionRecord?.clientId,
+                    status: whatsappConnectionRecord?.status,
+                    createdAt: whatsappConnectionRecord?.createdAt,
+                    updatedAt: whatsappConnectionRecord?.updatedAt
                 },
                 message: 'WhatsApp connection created successfully'
             };
