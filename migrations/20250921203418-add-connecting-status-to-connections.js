@@ -11,7 +11,7 @@ module.exports = {
     try {
       // Verificar si el valor 'connecting' ya existe en el ENUM
       const [results] = await queryInterface.sequelize.query(
-        `SELECT unnest(enum_range(NULL::connections_status_enum)) as enum_value`,
+        `SELECT unnest(enum_range(NULL::enum_connections_status)) as enum_value`,
         { transaction }
       );
       
@@ -20,7 +20,7 @@ module.exports = {
       if (!enumValues.includes('connecting')) {
         // Agregar el valor 'connecting' al ENUM existente
         await queryInterface.sequelize.query(
-          `ALTER TYPE connections_status_enum ADD VALUE 'connecting'`,
+          `ALTER TYPE enum_connections_status ADD VALUE 'connecting'`,
           { transaction }
         );
         
@@ -63,24 +63,24 @@ module.exports = {
       
       // Crear nuevo ENUM sin 'connecting'
       await queryInterface.sequelize.query(
-        `CREATE TYPE connections_status_enum_new AS ENUM ('active', 'inactive', 'error')`,
+        `CREATE TYPE enum_connections_status_new AS ENUM ('active', 'inactive', 'error')`,
         { transaction }
       );
       
       // Cambiar el tipo de columna al nuevo ENUM
       await queryInterface.sequelize.query(
-        `ALTER TABLE connections ALTER COLUMN status TYPE connections_status_enum_new USING status::text::connections_status_enum_new`,
+        `ALTER TABLE connections ALTER COLUMN status TYPE enum_connections_status_new USING status::text::enum_connections_status_new`,
         { transaction }
       );
       
       // Eliminar el ENUM antiguo y renombrar el nuevo
       await queryInterface.sequelize.query(
-        `DROP TYPE connections_status_enum`,
+        `DROP TYPE enum_connections_status`,
         { transaction }
       );
       
       await queryInterface.sequelize.query(
-        `ALTER TYPE connections_status_enum_new RENAME TO connections_status_enum`,
+        `ALTER TYPE enum_connections_status_new RENAME TO enum_connections_status`,
         { transaction }
       );
       
