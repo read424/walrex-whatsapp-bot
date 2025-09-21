@@ -1,7 +1,21 @@
 const { Model, DataTypes } = require('sequelize');
 const sequelize = require('../infrastructure/config/DatabaseConfig');
 
-class Connection extends Model {}
+class Connection extends Model {
+    static associate(models) {
+        // Una conexión puede tener muchas sesiones
+        Connection.hasMany(models.ChatSession, {
+            foreignKey: 'connection_id',
+            sourceKey: 'id'
+        });
+
+        // Una conexión puede tener muchos contactos
+        Connection.hasMany(models.Contact, {
+            foreignKey: 'connection_id',
+            sourceKey: 'id'
+        });
+    }
+}
 
 Connection.init({
     id: {
@@ -62,19 +76,13 @@ Connection.init({
         defaultValue: true,
         comment: 'Si la conexión está activa o no'
     },
-    created_at: {
-        type: DataTypes.DATE,
-        defaultValue: DataTypes.NOW
-    },
-    updated_at: {
-        type: DataTypes.DATE,
-        defaultValue: DataTypes.NOW
-    }
 }, {
     sequelize,
     modelName: 'Connection',
     tableName: 'connections',
-    timestamps: false,
+    timestamps: true,
+    createdAt: 'created_at',
+    updatedAt: 'updated_at',
     indexes: [
         {
             fields: ['tenant_id']
