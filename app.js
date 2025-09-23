@@ -50,9 +50,9 @@ app.use('/api', routes);
 (async ()=> {
     try{
         structuredLogger.info('APP', 'Initializing WhatsApp connection system');
-        await connectionManager.initialize(); // TEMPORALMENTE DESACTIVADO - No restaurar sesiones desde BD
+        await connectionManager.initialize();
 
-        // Iniciar monitoreo cada 30 segundos - TEMPORALMENTE DESACTIVADO
+        // Iniciar monitoreo cada 30 segundos
         setInterval(() => connectionManager.monitorConnections(), MONITORING_INTERVAL);
 
         structuredLogger.info('APP', 'WhatsApp context initialized successfully', {
