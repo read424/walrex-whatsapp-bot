@@ -26,11 +26,7 @@ WhatsAppConnection.init({
         allowNull: true,
         field: 'phone_number'
     },
-    sessionData: {
-        type: DataTypes.JSONB, // JSONB es más eficiente en PostgreSQL
-        allowNull: true,
-        field: 'session_data'
-    },
+    // sessionData removido - whatsapp-web.js maneja sesiones automáticamente en filesystem
     status: {
         type: DataTypes.ENUM('disconnected', 'connecting', 'connected', 'authenticated', 'error'),
         allowNull: false,
@@ -71,6 +67,11 @@ WhatsAppConnection.init({
         allowNull: false,
         defaultValue: true,
         field: 'is_active'
+    },
+    connectionId: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
+        field: 'connection_id'
     }
 }, {
     sequelize,
@@ -121,6 +122,15 @@ WhatsAppConnection.getConnectionByClientId = async function(clientId) {
             isActive: true
         }
     });
+};
+
+WhatsAppConnection.getConnectionByName = async function(name) {
+    return await this.findOne({
+        where: {
+            clientId: name,
+            isActive: true
+        }
+    })
 };
 
 WhatsAppConnection.cleanupOldSessions = async function(daysOld = 7) {
