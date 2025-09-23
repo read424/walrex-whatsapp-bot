@@ -69,6 +69,7 @@ notas.txt
 
 # Session directories
 src/session/
+src/sessions/
 
 # Image files - Ignore all except last-design.svg
 src/img/*

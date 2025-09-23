@@ -432,7 +432,8 @@ router.post('/typing', (req, res) => {
 
 router.post('/restart-connection', async (req, res) => {
     try {
-        const { clientId, tenantId } = req.body;
+        const { clientId } = req.body;
+        const tenantId = req.headers['X-Tenant-Id'] || 1;
 
         if(!clientId || !tenantId){
             return res.status(400).json({
@@ -448,6 +449,59 @@ router.post('/restart-connection', async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Error al reiniciar la conexión'
+        });
+    }
+});
+
+// Reset completo del dispositivo - desvincular, limpiar sesiones y preparar para nuevo emparejamiento
+router.post('/reset-device', async (req, res) => {
+    try {
+        const { clientId, tenantId } = req.body;
+
+        if (!clientId || !tenantId) {
+            return res.status(400).json({
+                success: false,
+                message: 'clientId y tenantId son requeridos'
+            });
+        }
+
+        const result = await req.connectionManager.resetDeviceConnection(clientId, tenantId);
+        res.json(result);
+    } catch (error) {
+        structuredLogger.error('WHATSAPP_ROUTES', 'Error resetting device connection', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error al resetear la conexión del dispositivo'
+        });
+    }
+});
+
+// Endpoint para verificar el estado de los listeners (debug)
+router.get('/listener-status/:clientId', async (req, res) => {
+    try {
+        const { clientId } = req.params;
+        
+        const connectionData = req.connectionManager.activeConnections.get(clientId);
+        
+        if (!connectionData) {
+            return res.status(404).json({
+                success: false,
+                message: `Connection ${clientId} not found`
+            });
+        }
+
+        const listenerStatus = connectionData.strategy.getListenerStatus();
+        
+        res.json({
+            success: true,
+            clientId: clientId,
+            listenerStatus: listenerStatus
+        });
+    } catch (error) {
+        structuredLogger.error('WHATSAPP_ROUTES', 'Error getting listener status', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error al obtener el estado de los listeners'
         });
     }
 });

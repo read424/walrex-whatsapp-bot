@@ -10,36 +10,40 @@ const path = require('path');
 const fs = require('fs').promises;
 const CustomerService = require('../outbound/customerService');
 const TradingAdapter = require('../outbound/TradingAdapter');
-// Logger ya no necesario, usando structuredLogger directamente
 
 const WhatsAppInterface = require('../../../../whatsAppInterface');
-
-// Importar el modelo de conexiones
-const { WhatsAppConnection } = require('../../../models/index');
+const { WhatsAppConnection, Connection } = require('../../../models/index');
 
 class WhatsAppWebJsStrategy extends WhatsAppInterface {
 
-    constructor(webSocket, connectionName = 'client-wallrex', tenantId = null) {
+    constructor(webSocket, connectionName = 'client-walrex', tenantId = null) {
         super();
         this.webSocketAdapter = webSocket;
+        this.parentConnection = null;
+        this.connectionName = connectionName;
         this.clientId = connectionName;
         this.tenantId = tenantId;
         this.isLoggedIn = false;
+        this.isClientReady = false;
         this.whatsAppBot = null; // Se inicializará después
         this.whatsAppAdmin = null; // Se inicializará después
         this.currentQR = null; // Para almacenar el QR actual
         this.connectionRecord = null; // Registro en la base de datos
-        this.sessionPath = path.join(__dirname, '../../../sessions', this.clientId);
+
+        this.sessionBasePath = path.join(__dirname, '../../../sessions');
+        this.sessionPath = path.join(this.sessionBasePath, this.connectionName);
 
         //properties for timeout by QR
         this.qrAttempts = 0;
         this.maxQrAttempts = 4;
         this.qrTimeout = null;
-        this.qrTimeoutDuration = 30000;//
+        this.qrTimeoutDuration = 30000;
         this.isConnectionClosed = false;
 
         // ChatService
         this.chatService = new ChatService(webSocket);
+
+        this.messageListenerSetup = false;
     }
 
     async init(){
@@ -55,7 +59,7 @@ class WhatsAppWebJsStrategy extends WhatsAppInterface {
             // 2. Crear cliente de WhatsApp
             this.client = new Client({
                 authStrategy: new LocalAuth({
-                    dataPath: this.sessionPath,
+                    dataPath: this.sessionBasePath,
                     clientId: this.clientId
                 }),
                 puppeteer: {
@@ -78,7 +82,7 @@ class WhatsAppWebJsStrategy extends WhatsAppInterface {
             await this.setupEventListeners();
             
             // 4. Actualizar estado en BD
-            await this.updateConnectionStatus('connecting');
+            await this.updateBothConnectionStatuses('connecting');
 
             structuredLogger.info('WhatsAppWebJsStrategy', 'About to initialize client', {
                 clientId: this.clientId
@@ -92,7 +96,7 @@ class WhatsAppWebJsStrategy extends WhatsAppInterface {
             });
             
         } catch (error) {
-            await this.updateConnectionStatus('error', error.message);
+            await this.updateBothConnectionStatuses('error', error.message);
             structuredLogger.error('WhatsAppWebJsStrategy', 'Error during initialization', error, {
                 clientId: this.clientId
             });
@@ -102,14 +106,22 @@ class WhatsAppWebJsStrategy extends WhatsAppInterface {
 
     async ensureConnectionRecord(){
         try {
-            this.connectionRecord = await WhatsAppConnection.getConnectionByClientId(this.clientId);
+            this.connectionRecord = await WhatsAppConnection.getConnectionByName(this.connectionName);
 
             if(!this.connectionRecord){
+                let parentConnection = await Connection.create({
+                    connection_name: this.connectionName,
+                    provider_type: 'whatsapp',
+                    status: 'inactive', // Estado inicial
+                    tenant_id: this.tenantId,
+                    // Otros campos que necesite la tabla connections
+                });
+                
                 //crear nuevo registro
                 this.connectionRecord = await WhatsAppConnection.create({
                     clientId: this.clientId,
                     tenantId: this.tenantId,
-                    connectionId: this.connectionId,
+                    connectionId: parentConnection.id,
                     status: 'disconnected',
                     settings: {
                         autoReconnect: true,
@@ -120,11 +132,18 @@ class WhatsAppWebJsStrategy extends WhatsAppInterface {
                 structuredLogger.info('WhatsAppWebJsStrategy', 'New connection record created', {
                     clientId: this.clientId,
                     tenantId: this.tenantId,
-                    connectionId: this.connectionId
+                    connectionId: parentConnection.id,
+                    whatsappConnectionId: this.connectionRecord.id
                 });
             }else{
-                if(!this.connectionRecord.connectionId && this.connectionId){
-                    this.connectionRecord.connectionId = this.connectionId;
+                this.parentConnection = await Connection.findByPk(this.connectionRecord.connectionId);
+                if (!this.parentConnection) {
+                    throw new Error(`Parent connection not found for WhatsApp connection ${this.connectionRecord.connectionId}`);
+                }
+                this.clientId = this.connectionRecord.connectionId;
+                    
+                if(!this.connectionRecord.connectionId){
+                    this.connectionRecord.connectionId;
                     await this.connectionRecord.save();
 
                     structuredLogger.info('WhatsAppWebJsStrategy', 'Updated existing record with connectionId', {
@@ -151,7 +170,6 @@ class WhatsAppWebJsStrategy extends WhatsAppInterface {
     async setupEventListeners() {
 
         this.client.on('qr', async (qr) => {
-
             // Si la conexion esta cerrada, no procesar mas qr
             if(this.isConnectionClosed){
                 structuredLogger.info('WhatsAppWebJsStrategy', 'Connection closed, skipping QR processing', {
@@ -159,7 +177,6 @@ class WhatsAppWebJsStrategy extends WhatsAppInterface {
                 });
                 return;
             }
-
 
             // Llamar el método que maneja el timeout
             await this.handleQRTimeout();
@@ -181,7 +198,9 @@ class WhatsAppWebJsStrategy extends WhatsAppInterface {
                 const base64Q = await QRCode.toDataURL(qr, {type: 'image/png'});
                 this.currentQR = base64Q;
 
-                console.log('QR Code generated: ', base64Q);
+                await this.updateWhatsAppConnectionRecord({
+                    qrCode: base64Q
+                });
 
                 // Emitir QR específicamente al tenant
                 this.webSocketAdapter.emitQRToTenant(this.tenantId, { 
@@ -199,7 +218,15 @@ class WhatsAppWebJsStrategy extends WhatsAppInterface {
         this.client.on('ready', async () => {
             console.log('WhatsApp event ready');
             this.isLoggedIn = true;
+            this.isClientReady = true;
             this.currentQR = null;
+
+            structuredLogger.info('WhatsAppWebJsStrategy', 'WhatsApp client ready event triggered', {
+                clientId: this.clientId,
+                isLoggedIn: this.isLoggedIn,
+                isClientReady: this.isClientReady,
+                messageListenerSetup: this.messageListenerSetup
+            });
 
             // Limpiar timeout y reiniciar contadores al conectarse exitosamente
             this.resetQRAttempts();
@@ -207,36 +234,47 @@ class WhatsAppWebJsStrategy extends WhatsAppInterface {
             const deviceInfo = await this.getDeviceInfo();
 
             //Actualizar registro en la base de datos
-            await this.updateConnectionStatus('authenticated');
-            await this.updateConnectionRecord({
+            await this.updateBothConnectionStatuses('connected');
+
+            await this.updateWhatsAppConnectionRecord({
                 qrCode: null,
                 deviceInfo: deviceInfo,
-                phoneNumber: deviceInfo?.phoneNumber || null
+                phoneNumber: deviceInfo?.phoneNumber || null,
+                lastSeen: new Date()
             });
 
             
             await this.connectionRecord.resetConnectionAttempts();
 
-            await this.saveSessionData();
+            // Session data is automatically managed by whatsapp-web.js
 
             structuredLogger.info('WhatsAppWebJsStrategy', 'WhatsApp client ready', {
                 clientId: this.clientId,
                 phoneNumber: deviceInfo?.phoneNumber || null,
             });
 
+            if(!this.messageListenerSetup){
+                this.setupMessageListeners();
+                this.messageListenerSetup = true;
+                structuredLogger.info('WhatsAppWebJsStrategy', 'Message listeners set up after ready event', {
+                    clientId: this.clientId
+                });                
+            }
+
             if (!this.whatsAppBot) {
                 const CustomerService = require('../outbound/customerService');
                 this.whatsAppBot = new WhatsAppBotRefactored(new CustomerService());
                 this.whatsAppBot.setWhatsAppClient(this);
+                structuredLogger.info('WhatsAppWebJsStrategy', 'WhatsAppBot initialized after ready', {
+                    clientId: this.clientId
+                });                
             }
 
-            // Emitir estado de conexión al tenant específico
-            //this.webSocketAdapter.emitConnectionStatusToTenant(this.tenantId, {
-            //    status: 'ready',
-            //    clientId: this.clientId,
-            //    phoneNumber: deviceInfo?.phoneNumber || null,
-            //    message: 'WhatsApp is ready'
-            //});
+            // Asegurar que los listeners de mensajes estén configurados
+            this.listenMessages();
+
+            // Setup message status listeners
+            this.setupMessageStatusListeners();
 
             this.webSocketAdapter.emitToTenant(this.tenantId, 'whatsappReady', {
                 clientId: this.clientId,
@@ -248,15 +286,35 @@ class WhatsAppWebJsStrategy extends WhatsAppInterface {
 
         this.client.on('authenticated', async (session) => {
             console.log('WhatsApp event authenticated');
+            this.isLoggedIn = true;
+            this.isClientReady = true;
             this.resetQRAttempts();
             
-            await this.updateConnectionStatus('connected');
+            
+            structuredLogger.info('WhatsAppWebJsStrategy', 'WhatsApp client authenticated event triggered', {
+                clientId: this.clientId,
+                isLoggedIn: this.isLoggedIn,
+                isClientReady: this.isClientReady,
+                messageListenerSetup: this.messageListenerSetup
+            });
+            
+            await this.updateBothConnectionStatuses('authenticated');
             
             structuredLogger.info('WhatsAppWebJsStrategy', 'Session authenticated successfully', {
                 clientId: this.clientId,
             });
 
-            await this.saveSessionData();
+            // Session data is automatically managed by whatsapp-web.js
+
+            // Configurar listeners de mensajes también en authenticated (por si ready no se dispara)
+            if(!this.messageListenerSetup){
+                this.setupMessageListeners();
+                this.messageListenerSetup = true;
+                structuredLogger.info('WhatsAppWebJsStrategy', 'Message listeners set up after authenticated event', {
+                    clientId: this.clientId
+                });                
+            }
+            
 
             this.webSocketAdapter.emitToTenant(this.tenantId, 'authenticated', {
                 clientId: this.clientId,
@@ -267,7 +325,7 @@ class WhatsAppWebJsStrategy extends WhatsAppInterface {
 
         this.client.on('auth_failure', async (msg) => {
             console.log('WhatsApp event auth_failure');
-            await this.updateConnectionStatus('error', msg);
+            await this.updateBothConnectionStatuses('error', msg);
 
             structuredLogger.error('WhatsAppWebJsStrategy', 'Authentication failed', null, { 
                 clientId: this.clientId,
@@ -280,7 +338,10 @@ class WhatsAppWebJsStrategy extends WhatsAppInterface {
         this.client.on('disconnected', async (reason) => {
             console.log('WhatsApp event disconnected');
             this.isLoggedIn = false;
-            await this.updateConnectionStatus('disconnected', reason);
+            this.isClientReady = false;
+            this.messageListenerSetup = false;
+
+            await this.updateBothConnectionStatuses('disconnected', reason);
 
             structuredLogger.warn('WhatsAppWebJsStrategy', 'Client disconnected', {
                 clientId: this.clientId,
@@ -294,14 +355,6 @@ class WhatsAppWebJsStrategy extends WhatsAppInterface {
                 reason: reason,
                 message: 'WhatsApp disconnected'
             });
-
-            // Notificar por WebSocket (mantener compatibilidad)
-            //this.webSocketAdapter.emit('whatsappDisconnected', {
-            //    clientId: this.clientId,
-            //    tenantId: this.tenantId,
-            //    reason: reason,
-            //    timestamp: new Date().toISOString()
-            //});
         });
 
         //Pantalla de carga
@@ -316,72 +369,262 @@ class WhatsAppWebJsStrategy extends WhatsAppInterface {
             this.webSocketAdapter.emitToTenant(this.tenantId, 'loading_screen', {percent, message});
         });
 
-        this.listenMessages();
-        this.setupMessageStatusListeners();
     }
 
-    async clearSession(){
-        try {
-            if(await this.fileExists(this.sessionPath)){
-                await fs.rmdir(this.sessionPath, { recursive: true });
-                structuredLogger.info('WhatsAppWebJsStrategy', 'Session data cleared', {
+    setupMessageListeners(){
+        structuredLogger.info('WhatsAppWebJsStrategy', 'Setting up message listeners', {
+            clientId: this.clientId,
+            isClientReady: this.isClientReady,
+            hasClient: !!this.client,
+            messageListenerSetup: this.messageListenerSetup
+        });
+
+        if (!this.client || !this.isClientReady) {
+            structuredLogger.warn('WhatsAppWebJsStrategy', 'Cannot setup message listeners - client not ready', {
+                clientId: this.clientId,
+                hasClient: !!this.client,
+                isClientReady: this.isClientReady
+            });
+            return;
+        }
+        
+        structuredLogger.info('WhatsAppWebJsStrategy', 'Registering message event listener', {
+            clientId: this.clientId,
+            clientEvents: this.client.listenerCount('message')
+        });
+        
+        this.client.on('message', async (message) => {
+            structuredLogger.info('WhatsAppWebJsStrategy', 'Raw message received', {
+                messageFrom: message.from,
+                messageBody: message.body,
+                messageType: message.type,
+                timestamp: new Date().toISOString(),
+                clientId: this.clientId
+            });
+
+            try {
+                // Filtrar mensajes no deseados
+                if (message.from === PHONE_PATTERNS.STATUS_BROADCAST || 
+                    message.from.endsWith(PHONE_PATTERNS.GROUP_CHAT_SUFFIX) || 
+                    (!message.from.includes('51913061289@c.us') && !message.from.includes('51935926562@c.us'))) {
+                    structuredLogger.debug('WhatsAppWebJsStrategy', 'Message filtered out', {
+                        messageFrom: message.from,
+                        reason: 'filtered',
+                        clientId: this.clientId
+                    });
+                    return;
+                }
+                
+                structuredLogger.info('WhatsAppWebJsStrategy', 'Processing incoming message', {
+                    messageFrom: message.from,
+                    messageBody: message.body?.substring(0, 50) + '...',
+                    clientId: this.clientId
+                });
+                
+                // Delegar la lógica al método `handleIncomingMessage`
+                await this.handleIncomingMessage(message);
+            } catch (error) {
+                structuredLogger.error('WhatsAppWebJsStrategy', 'Error in message listener', error, {
+                    messageFrom: message.from,
                     clientId: this.clientId
                 });
             }
+        });
 
-            //Limpiar datos de session en la base de datos
-            await this.updateConnectionRecord({
-                sessionData: null,
-                qrCode: null,
-                phoneNumber: null,
-                deviceInfo: null
-            });
+        structuredLogger.info('WhatsAppWebJsStrategy', 'Message listener successfully attached', {
+            clientId: this.clientId,
+            totalMessageListeners: this.client.listenerCount('message')
+        });        
+    }
 
-            structuredLogger.info('WhatsAppWebJsStrategy', 'Session data cleared', {
+    // Método para verificar el estado de los listeners (debug)
+    getListenerStatus() {
+        return {
+            clientId: this.clientId,
+            hasClient: !!this.client,
+            isClientReady: this.isClientReady,
+            messageListenerSetup: this.messageListenerSetup,
+            totalMessageListeners: this.client ? this.client.listenerCount('message') : 0,
+            isLoggedIn: this.isLoggedIn
+        };
+    }
+
+    async listenMessages() {
+        structuredLogger.info('WhatsAppWebJsStrategy', 'listenMessages called', {
+            clientId: this.clientId,
+            isClientReady: this.isClientReady,
+            messageListenerSetup: this.messageListenerSetup
+        });
+
+
+        if (!this.isClientReady) {
+            structuredLogger.warn('WhatsAppWebJsStrategy', 'listenMessages called but client not ready yet', {
+                    clientId: this.clientId
+                });
+            return;
+        }
+
+        if (this.messageListenerSetup) {
+            structuredLogger.info('WhatsAppWebJsStrategy', 'Message listeners already set up', {
                 clientId: this.clientId
             });
-        }catch (error){
-            structuredLogger.error('WhatsAppWebJsStrategy', 'Error clearing session', error, {
+            return;
+        }
+
+        this.setupMessageListeners();
+        this.messageListenerSetup = true;
+        structuredLogger.info('WhatsAppWebJsStrategy', 'Message listeners set up via listenMessages method', {
+            clientId: this.clientId
+        });
+    }
+
+    async handleIncomingMessage(message) {
+        structuredLogger.info('WhatsAppWebJsStrategy', `handleIncomingMessage called`, {
+            messageFrom: message.from,
+            messageBody: message.body,
+            hasWhatsAppBot: !!this.whatsAppBot,
                 clientId: this.clientId
+            });
+        
+        try{
+            // Determinar si es un mensaje de administrador
+            const isAdminMessage = message.from.includes('51935926562@c.us');
+            
+            if (isAdminMessage) {
+                // Manejar mensaje de administrador
+                if (!this.whatsAppAdmin) {
+                    structuredLogger.info('WhatsAppWebJsStrategy', 'Initializing WhatsAppAdministrator for admin message', {
+                        messageFrom: message.from
+                    });
+                    
+                    // Crear instancia de TradingAdapter con dependencias
+                    const ExchangeRateRepositoryAdapter = require('../outbound/ExchangeRateRepositoryAdapter');
+                    const BinanceAPIAdapter = require('../outbound/BinanceAPIAdapter');
+                    const exchangeRateRepository = new ExchangeRateRepositoryAdapter();
+                    const binanceApi = new BinanceAPIAdapter();
+                    const tradingAdapter = new TradingAdapter(exchangeRateRepository, binanceApi);
+                    
+                    this.whatsAppAdmin = new WhatsAppAdministrator(new CustomerService(), tradingAdapter);
+                    this.whatsAppAdmin.setWhatsAppClient(this);
+                }
+                await this.whatsAppAdmin.handleMessage(message);
+            } else {
+
+                const chatData = await this.chatService.processIncomingMessage(
+                    message, 
+                    this.connectionRecord.id, 
+                    this.tenantId
+                );
+
+                structuredLogger.info('WhatsAppWebJsStrategy', 'Message saved to database', {
+                    messageId: chatData.message.id,
+                    sessionId: chatData.chatSession.id,
+                    contactPhone: chatData.contact.phoneNumber
+                });
+                
+                // Manejar mensaje de usuario normal
+                if (!this.whatsAppBot) {
+                    structuredLogger.warn('WhatsAppWebJsStrategy', 'WhatsAppBot not initialized yet, initializing now', {
+                        messageFrom: message.from
+                    });
+                    
+                    this.whatsAppBot = new WhatsAppBotRefactored(new CustomerService());
+                    this.whatsAppBot.setWhatsAppClient(this);
+                }
+                await this.whatsAppBot.handleMessage(message);
+            }
+        }catch(error){
+            structuredLogger.error('WhatsAppWebJsStrategy', 'Error handling incoming message', error, {
+                messageFrom: message.from,
+                messageBody: message.body
+            });
+            
+            // No lanzar el error para evitar que se propague
+            structuredLogger.warn('WhatsAppWebJsStrategy', 'Message handling failed, continuing...', {
+                messageFrom: message.from
             });
         }
-    }
+    }    
 
-    async saveSessionData(){
-        try {
-            if(!this.client) return;
-
-            const sessionDataPath = path.join(this.sessionPath, 'session.json');
-
-            if(await this.fileExists(sessionDataPath)){
-                const sessionData = await fs.readFile(sessionDataPath, 'utf8');
-                await this.updateConnectionRecord({
-                    sessionData: sessionData
-                });
-
-                structuredLogger.info('WhatsAppWebJsStrategy', 'Session data loaded from file', {
+    setupMessageStatusListeners(){
+        if (!this.client || !this.isClientReady) {
+            structuredLogger.warn('WhatsAppWebJsStrategy', 'Cannot setup message status listeners - client not ready', {
                     clientId: this.clientId
                 });
-            }
-        }catch (error){
-            structuredLogger.error('WhatsAppWebJsStrategy', 'Error saving session data', error, {
+            return;
+        }
+
+        this.client.on('message_ack', async (message, ack)=>{
+            try{
+                let status;
+                switch(ack){
+                    case 1: status = 1; break;// sent
+                    case 2: status = 2; break;// delivered
+                    case 3: status = 3; break;// read
+                    default: status = 0; break;// sending
+                }
+
+                await this.chatService.updateChatSessionStatus(message.id.__serialized, status);
+
+                structuredLogger.debug('WhatsAppWebJsStrategy', 'Message status updated', {
+                    messageId: message.id._serialized,
+                    status
+                });
+            }catch(error){
+                structuredLogger.error('WhatsAppWebJsStrategy', 'Error updating message status', error, {
                 clientId: this.clientId
             });            
         }
+        });
+    }
+
+    async updateWhatsAppConnectionRecord(data) {
+        if (this.connectionRecord) {
+            try {
+                // Update specific fields in the WhatsAppConnection model
+                Object.assign(this.connectionRecord, data);
+                await this.connectionRecord.save();
+                
+                structuredLogger.debug('WhatsAppWebJsStrategy', 'WhatsApp connection record updated', {
+                    clientId: this.clientId,
+                    updates: Object.keys(data)
+                });
+            } catch (error) {
+                structuredLogger.error('WhatsAppWebJsStrategy', 'Error updating WhatsApp connection record', error, {
+                    clientId: this.clientId,
+                    data: data
+                });
+                throw error;
+            }
+        } else {
+            structuredLogger.warn('WhatsAppWebJsStrategy', 'No connection record available for update', {
+                clientId: this.clientId
+            });
+        }
+    }
+    
+    async updateConnectionRecord(data){
+        structuredLogger.warn('WhatsAppWebJsStrategy', 'updateConnectionRecord is deprecated, use updateWhatsAppConnectionRecord', {
+            clientId: this.clientId
+        });
+        return await this.updateWhatsAppConnectionRecord(data);
     }
 
     async updateConnectionStatus(status, error = null){
-        try {
-            if(this.connectionRecord){
-                await this.connectionRecord.updateStatus(status, error);
-                structuredLogger.info('WhatsAppWebJsStrategy', 'Connection status updated', {
+        if (this.connectionRecord) {
+            try {
+            await this.connectionRecord.updateStatus(status, error);
+            structuredLogger.info('WhatsAppWebJsStrategy', 'Connection status updated', {
+                clientId: this.clientId,
+                status: status,
+                error: error
+            });
+            } catch (updateError) {
+                structuredLogger.error('WhatsAppWebJsStrategy', 'Error updating connection status', updateError, {
                     clientId: this.clientId,
-                    status: status,
-                    error: error
+                    status: status
                 });
             }
-        } catch(error){
-            structuredLogger.error('WhatsAppWebJsStrategy', 'Error updating connection status', error);
         }
     }
 
@@ -390,6 +633,8 @@ class WhatsAppWebJsStrategy extends WhatsAppInterface {
             if (!this.client) return null;
 
             const info = await this.client.info;
+
+            structuredLogger.info('WhatsAppWebJsStrategy', 'Device info retrieved', info);
 
             return {
                 phoneNumber: info?.wid?.user || null,
@@ -406,17 +651,123 @@ class WhatsAppWebJsStrategy extends WhatsAppInterface {
         }
     }
 
-    async checkSession() {
-        // Aquí verificamos si hay sesión activa
-        // LocalAuth se encarga de manejar la sesión, pero puedes añadir lógica para verificar
+    async clearSession(){
         try {
-            const sessionData = await LocalAuth.getSession(); // Obtener los datos de la sesión
-            return sessionData !== undefined; // Retorna true si hay sesión
+            const authSessionDir = path.join(this.sessionBasePath, `session-${this.clientId}`);
+            
+            if (await this.directoryExists(authSessionDir)) {
+                await fs.rmdir(authSessionDir, { recursive: true });
+                structuredLogger.info('WhatsAppWebJsStrategy', 'LocalAuth session directory cleared', {
+                    clientId: this.clientId,
+                    sessionDir: authSessionDir
+                });
+            }
+
+            await this.updateWhatsAppConnectionRecord({
+                qrCode: null,
+                phoneNumber: null,
+                deviceInfo: null
+            });
+
+            // Session backup variables removed - using filesystem only
+
+            structuredLogger.info('WhatsAppWebJsStrategy', 'Session data cleared completely', {
+                clientId: this.clientId
+            });
         } catch (error) {
-            structuredLogger.error('WhatsAppWebJsStrategy', `Error al verificar la sesión: ${error}`);
-            return false; // Retorna false si no hay sesión
+            structuredLogger.error('WhatsAppWebJsStrategy', 'Error clearing session', error, {
+                clientId: this.clientId
+            });
         }
-    }    
+    }
+
+    // captureAndSaveSessionData eliminado - whatsapp-web.js maneja sesiones automáticamente
+
+    async restoreSessionIfExists(){
+        // WhatsApp-web.js maneja automáticamente la restauración de sesiones desde el filesystem
+        // Este método es llamado por WhatsAppConnectionManager durante la inicialización
+        try {
+            await this.ensureSessionDirectory();
+            
+            const sessionExists = await this.directoryExists(this.sessionPath);
+            
+            if (sessionExists) {
+                structuredLogger.info('WhatsAppWebJsStrategy', 'Session directory exists, whatsapp-web.js will restore automatically', {
+                    clientId: this.clientId,
+                    sessionPath: this.sessionPath
+                });
+                
+                // Verificar si hay archivos de sesión válidos
+                const sessionFiles = await fs.readdir(this.sessionPath).catch(() => []);
+                if (sessionFiles.length > 0) {
+                    structuredLogger.info('WhatsAppWebJsStrategy', 'Session files found, restoration should work', {
+                clientId: this.clientId,
+                        fileCount: sessionFiles.length
+                    });
+                } else {
+                    structuredLogger.warn('WhatsAppWebJsStrategy', 'Session directory exists but no files found', {
+                clientId: this.clientId,
+                        sessionPath: this.sessionPath
+                    });
+                }
+            } else {
+                structuredLogger.info('WhatsAppWebJsStrategy', 'No existing session found, will require QR scan', {
+                    clientId: this.clientId,
+                    sessionPath: this.sessionPath
+                });
+            }
+            
+            // Siempre retornamos true para que WhatsAppConnectionManager continúe con la inicialización
+            // WhatsApp-web.js se encargará de determinar si puede restaurar la sesión o necesita QR
+            return true;
+            
+        } catch (error) {
+            structuredLogger.error('WhatsAppWebJsStrategy', 'Error checking session directory', error, {
+                clientId: this.clientId
+            });
+            // Retornamos true para que no bloquee la inicialización
+            return true;
+        }
+    }
+
+    async ensureSessionDirectory() {
+        try {
+            await fs.mkdir(this.sessionPath, { recursive: true });
+            structuredLogger.debug('WhatsAppWebJsStrategy', 'Session directory ensured', {
+                sessionPath: this.sessionPath
+            });
+        } catch (error) {
+            structuredLogger.error('WhatsAppWebJsStrategy', 'Error creating session directory', error, {
+                sessionPath: this.sessionPath
+            });
+            throw error;
+        }
+    }
+
+    async fileExists(filePath) {
+        try {
+            await fs.access(filePath);
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    getConnectionState() {
+        return {
+            clientId: this.clientId,
+            isLoggedIn: this.isLoggedIn,
+            isClientReady: this.isClientReady,
+            messageListenerSetup: this.messageListenerSetup,
+            hasClient: !!this.client,
+            hasWhatsAppBot: !!this.whatsAppBot,
+            isConnectionClosed: this.isConnectionClosed,
+            whatsappConnectionId: this.connectionRecord?.id || null,
+            whatsappStatus: this.connectionRecord?.status || 'unknown',
+            parentConnectionId: this.parentConnection?.id || null,
+            parentStatus: this.parentConnection?.status || 'unknown' // AGREGAR
+        };
+    }
 
     async sendMessage(number, message){
         try {
@@ -438,16 +789,179 @@ class WhatsAppWebJsStrategy extends WhatsAppInterface {
                 messageLength: message?.length || 0,
                 messagePreview: message?.substring(0, 50) + '...'
             });
-            
-            // No reintentar automáticamente para evitar envíos múltiples
-            structuredLogger.warn('WhatsAppWebJsStrategy', 'Message send failed, not retrying', {
-                error: error.message,
-                phoneNumber: number
-            });
-            
-            // Lanzar el error para que el caller decida qué hacer
             throw error;
         }
+    }    
+
+    async onMessage(callback){
+        structuredLogger.info('WhatsAppWebJsStrategy', 'onMessage called - delegating to listenMessages', {
+            clientId: this.clientId
+        });        
+        await this.listenMessages();
+    }
+
+    async sendMessageAndUpdate(number, message, messageType = 'text', advisorId = null){
+        try{
+            await this.sendMessage(number, message);
+
+            const contact = await this.chatService.findOrCreateContact(
+                number.replace('@c.us', ''),
+                null,
+                this.tenantId
+            );
+
+            const chatSession = await this.chatService.findOrCreateChatSession(
+                contact.id,
+                this.connectionRecord.id,
+                this.tenantId
+            );
+
+            const outgoingMessage = await this.chatService.sendOutgoingMessage(
+                chatSession.id,
+                message,
+                advisorId,
+                messageType
+            );
+
+            structuredLogger.info('WhatsAppWebJsStrategy', 'Outgoing message sent and saved', {
+                messageId: outgoingMessage.id,
+                to: number
+            });
+    
+            return outgoingMessage;
+
+        } catch(error){
+            structuredLogger.error('WhatsAppWebJsStrategy', 'Error sending message and updating DB', error);
+            throw error;
+        }
+
+    }
+
+    getQRCode() {
+        return this.currentQR;
+    }
+
+    isClientReady() {
+        return this.client && this.isLoggedIn;
+    }
+
+    getClientStatus() {
+        return {
+            hasClient: !!this.client,
+            isLoggedIn: this.isLoggedIn,
+            hasWhatsAppBot: !!this.whatsAppBot,
+            hasWhatsAppAdmin: !!this.whatsAppAdmin
+        };
+    }
+
+    async handleQRTimeout(){
+        this.qrAttempts++;
+
+        structuredLogger.info('WhatsAppWebJsStrategy', 'QR timeout ocurred', {
+            clientId: this.clientId,
+            attempts: this.qrAttempts,
+            maxAttempts: this.maxQrAttempts
+        });
+
+        if(this.qrAttempts >= this.maxQrAttempts){
+            await this.closeConnectionDueToQRTimeout();
+        }
+    }
+
+    async closeConnectionDueToQRTimeout(){
+        try{
+            this.isConnectionClosed = true;
+
+            await this.updateBothConnectionStatuses('disconnected', 'QR timeout occurred');
+
+            if(this.client){
+                await this.client.destroy();
+                this.client = null;
+            }
+
+            this.isLoggedIn = false;
+            this.currentQR = null;
+
+            //Emitir evento de timeout al frontend
+            this.webSocketAdapter.emitToTenant(this.tenantId, 'qrTimeout', {
+                clientId: this.clientId,
+                tenantId: this.tenantId,
+                attempts: this.qrAttempts,
+                maxAttempts: this.maxQrAttempts,
+                message: 'Se alcanzo el maximo de intentos para escanear el QR',
+                timestamp: new Date().toISOString()
+            });
+
+            structuredLogger.info('WhatsAppWebJsStrategy', 'Connection closed due to QR timeout', {
+                clientId: this.clientId,
+                attempts: this.qrAttempts
+            });
+
+        }catch(error){
+            structuredLogger.error('WhatsAppWebJsStrategy', 'Error closing connection due to QR timeout', error, {
+                clientId: this.clientId,
+                attempts: this.qrAttempts
+            });
+        }
+    }
+
+    resetQRAttempts() {
+        this.qrAttempts = 0;
+        if (this.qrTimeout) {
+            clearTimeout(this.qrTimeout);
+            this.qrTimeout = null;
+        }
+        structuredLogger.debug('WhatsAppWebJsStrategy', 'QR attempts reset', {
+            clientId: this.clientId
+        });
+    }
+
+    async restartConnection(){
+        try {
+
+            structuredLogger.info('WhatsAppWebJsStrategy', 'Restarting connection manually', {
+                clientId: this.clientId
+            });
+
+            this.resetQRAttempts();
+
+            if(this.client){
+                await this.client.destroy();
+                this.client = null;
+            }
+
+            this.isLoggedIn = false;
+            this.isClientReady = false;
+            this.messageListenerSetup = false;
+            this.currentQR = null;
+
+            await this.init();
+
+            structuredLogger.info('WhatsAppWebJsStrategy', 'Connection restarted completed', {
+                clientId: this.clientId
+            });
+        }catch(error){
+            structuredLogger.error('WhatsAppWebJsStrategy', 'Error restarting connection', error, {
+                clientId: this.clientId
+            });
+            throw error;
+        }
+    }
+
+    async cleanup(){
+        if(this.qrTimeout){
+            clearTimeout(this.qrTimeout);
+            this.qrTimeout = null;
+        }
+
+        if(this.client){
+            await this.client.destroy();
+            this.client = null;
+        }
+
+        this.isLoggedIn = false;
+        this.isClientReady = false;
+        this.messageListenerSetup = false;        
     }
 
     async sendButtons(number, message, buttons, footer){
@@ -481,78 +995,6 @@ class WhatsAppWebJsStrategy extends WhatsAppInterface {
         }
     }
 
-    async restoreSessionData(){
-        try {
-
-            if(!this.connectionRecord) {
-                structuredLogger.warn('WhatsAppWebJsStrategy', 'No connection record found for session restoration', {
-                    clientId: this.clientId
-                });
-                return;
-            }
-
-            if (!this.connectionRecord.sessionData){
-                structuredLogger.info('WhatsAppWebJsStrategy', 'No session data found in database', {
-                    clientId: this.clientId
-                });
-                return;
-            }
-
-            structuredLogger.info('WhatsAppWebJsStrategy', 'Restoring session data from database', {
-                clientId: this.clientId,
-                sessionDataLength: this.connectionRecord.sessionData.length
-            });
-
-            await this.ensureSessionDirectory();
-
-            const sessionFilePath = path.join(this.sessionPath, 'session.json');
-            await fs.writeFile(sessionFilePath, this.connectionRecord.sessionData, 'utf8');
-
-            structuredLogger.info('WhatsAppWebJsStrategy', 'Session data restored to file system', {
-                clientId: this.clientId,
-                sessionFilePath
-            });
-
-        }catch (error){
-            structuredLogger.error('WhatsAppWebJsStrategy', 'Error restoring session data', error, {
-                clientId: this.clientId
-            });
-
-            await this.clearSession();
-        }
-    }
-
-    async ensureSessionDirectory() {
-        try {
-            await fs.mkdir(this.sessionPath, { recursive: true });
-            structuredLogger.debug('WhatsAppWebJsStrategy', 'Session directory ensured', {
-                sessionPath: this.sessionPath
-            });
-        } catch (error) {
-            structuredLogger.error('WhatsAppWebJsStrategy', 'Error creating session directory', error, {
-                sessionPath: this.sessionPath
-            });
-            throw error;
-        }
-    }
-
-    /**
-     * Verifica si un archivo existe
-    */
-    async fileExists(filePath) {
-        try {
-            await fs.access(filePath);
-            return true;
-        } catch {
-            return false;
-        }
-    }
-
-    /**
-     * Envía mensajes multimedia
-     * @param {string} number - Número de teléfono
-     * @param {MessageMedia} media - Objeto MessageMedia
-    */
     async sendMessageMedia(number, media) {
         try {
             structuredLogger.info('WhatsAppWebJsStrategy', `Sending media message to: ${number}`, {
@@ -656,349 +1098,97 @@ class WhatsAppWebJsStrategy extends WhatsAppInterface {
         }
     }
 
-    async listenMessages() {
-        structuredLogger.info('WhatsAppWebJsStrategy', `Setting up message listener`)
-        this.client.on('message', async message => {
-            structuredLogger.info('WhatsAppWebJsStrategy', `Raw message received`, {
-                messageFrom: message.from,
-                messageBody: message.body,
-                messageType: message.type,
-                timestamp: new Date().toISOString()
-            });
-            try {
-                // Filtrar mensajes no deseados
-                if (message.from === PHONE_PATTERNS.STATUS_BROADCAST || 
-                    message.from.endsWith(PHONE_PATTERNS.GROUP_CHAT_SUFFIX) || 
-                    (!message.from.includes('51913061289@c.us') && !message.from.includes('51935926562@c.us'))) {
-                    structuredLogger.debug('WhatsAppWebJsStrategy', 'Message filtered out', {
-                        messageFrom: message.from,
-                        reason: 'filtered'
-                    });
-                    return;
-                }
-                
-                structuredLogger.info('WhatsAppWebJsStrategy', 'Processing incoming message', {
-                    messageFrom: message.from,
-                    messageBody: message.body?.substring(0, 50) + '...'
-                });
-                
-                // Delegar la lógica al método `handleIncomingMessage`
-                await this.handleIncomingMessage(message);
-            } catch (error) {
-                structuredLogger.error('WhatsAppWebJsStrategy', 'Error in message listener', error, {
-                    messageFrom: message.from
-                });
-            }
-        });
-    }    
-
-    async handleIncomingMessage(message) {
-        structuredLogger.info('WhatsAppWebJsStrategy', `handleIncomingMessage called`, {
-            messageFrom: message.from,
-            messageBody: message.body,
-            hasWhatsAppBot: !!this.whatsAppBot,
-            isAdminMessage: message.from.includes('51935926562@c.us')
-        });
-        
-        try{
-            // Determinar si es un mensaje de administrador
-            const isAdminMessage = message.from.includes('51935926562@c.us');
-            
-            if (isAdminMessage) {
-                // Manejar mensaje de administrador
-                if (!this.whatsAppAdmin) {
-                    structuredLogger.info('WhatsAppWebJsStrategy', 'Initializing WhatsAppAdministrator for admin message', {
-                        messageFrom: message.from
-                    });
-                    
-                    // Crear instancia de TradingAdapter con dependencias
-                    const ExchangeRateRepositoryAdapter = require('../outbound/ExchangeRateRepositoryAdapter');
-                    const BinanceAPIAdapter = require('../outbound/BinanceAPIAdapter');
-                    const exchangeRateRepository = new ExchangeRateRepositoryAdapter();
-                    const binanceApi = new BinanceAPIAdapter();
-                    const tradingAdapter = new TradingAdapter(exchangeRateRepository, binanceApi);
-                    
-                    this.whatsAppAdmin = new WhatsAppAdministrator(new CustomerService(), tradingAdapter);
-                    this.whatsAppAdmin.setWhatsAppClient(this);
-                }
-                await this.whatsAppAdmin.handleMessage(message);
-            } else {
-
-                const chatData = await this.chatService.processIncomingMessage(
-                    message, 
-                    this.connectionRecord.id, 
-                    this.tenantId
-                );
-
-                structuredLogger.info('WhatsAppWebJsStrategy', 'Message saved to database', {
-                    messageId: chatData.message.id,
-                    sessionId: chatData.chatSession.id,
-                    contactPhone: chatData.contact.phoneNumber
-                });
-                
-                // Manejar mensaje de usuario normal
-                if (!this.whatsAppBot) {
-                    structuredLogger.warn('WhatsAppWebJsStrategy', 'WhatsAppBot not initialized yet, initializing now', {
-                        messageFrom: message.from
-                    });
-                    
-                    this.whatsAppBot = new WhatsAppBotRefactored(new CustomerService());
-                    this.whatsAppBot.setWhatsAppClient(this);
-                }
-                await this.whatsAppBot.handleMessage(message);
-            }
-        }catch(error){
-            structuredLogger.error('WhatsAppWebJsStrategy', 'Error handling incoming message', error, {
-                messageFrom: message.from,
-                messageBody: message.body
-            });
-            
-            // No lanzar el error para evitar que se propague
-            // Solo loggear y continuar
-            structuredLogger.warn('WhatsAppWebJsStrategy', 'Message handling failed, continuing...', {
-                messageFrom: message.from
-            });
+    async logout() {
+        if (this.client) {
+            await this.client.logout();
         }
-    }    
-
-    async onMessage(callback){
-        this.client.on('message_create', callback);
     }
 
-    async sendMessageAndUpdate(number, message, messageType = 'text', advisorId = null){
-        try{
-            await this.sendMessage(number, message);
+    // Métodos de backup eliminados - whatsapp-web.js maneja las sesiones automáticamente
 
-            const contact = await this.chatService.findOrCreateContact(
-                number.replace('@c.us', ''),
-                null,
-                this.tenantId
-            );
+    async directoryExists(dirPath) {
+        try {
+            const stat = await fs.stat(dirPath);
+            return stat.isDirectory();
+        } catch {
+            return false;
+        }
+    }
 
-            const chatSession = await this.chatService.findOrCreateChatSession(
-                contact.id,
-                this.connectionRecord.id,
-                this.tenantId
-            );
-
-            const outgoingMessage = await this.chatService.sendOutgoingMessage(
-                chatSession.id,
-                message,
-                advisorId,
-                messageType
-            );
-
-            structuredLogger.info('WhatsAppWebJsStrategy', 'Outgoing message sent and saved', {
-                messageId: outgoingMessage.id,
-                to: number
+    async ensureDirectory(dirPath) {
+        try {
+            await fs.mkdir(dirPath, { recursive: true });
+        } catch (error) {
+            structuredLogger.error('WhatsAppWebJsStrategy', 'Error creating directory', error, {
+                dirPath: dirPath
             });
-    
-            return outgoingMessage;
-
-        } catch(error){
-            structuredLogger.error('WhatsAppWebJsStrategy', 'Error sending message and updating DB', error);
             throw error;
         }
-
     }
 
-    // Método para obtener el QR actual
-    getQRCode() {
+    async updateBothConnectionStatuses(whatsappStatus, connectionStatus = null, error = null) {
+        try {
+            // Determinar el status de la tabla connections basado en whatsapp status
+            const parentStatus = connectionStatus || this.mapWhatsAppStatusToConnectionStatus(whatsappStatus);
+
+            // Actualizar WhatsAppConnection
+            if (this.connectionRecord) {
+                await this.connectionRecord.updateStatus(whatsappStatus, error);
+                structuredLogger.debug('WhatsAppWebJsStrategy', 'WhatsApp connection status updated', {
+            clientId: this.clientId,
+                    whatsappStatus: whatsappStatus
+                });
+            }
+
+            // Actualizar Connection padre
+            if (this.parentConnection) {
+                this.parentConnection.status = parentStatus;
+                this.parentConnection.lastSeen = new Date();
+                if (error) {
+                    this.parentConnection.lastError = error;
+                }
+                await this.parentConnection.save();
+                
+                structuredLogger.debug('WhatsAppWebJsStrategy', 'Parent connection status updated', {
+                    clientId: this.clientId,
+                    parentStatus: parentStatus
+                });
+            }
+
+            structuredLogger.info('WhatsAppWebJsStrategy', 'Both connection statuses updated', {
+                clientId: this.clientId,
+                whatsappStatus: whatsappStatus,
+                parentStatus: parentStatus,
+                error: error
+            });
+
+        } catch (updateError) {
+            structuredLogger.error('WhatsAppWebJsStrategy', 'Error updating connection statuses', updateError, {
+                clientId: this.clientId,
+                whatsappStatus: whatsappStatus
+            });
+        }
+    }
+
+    mapWhatsAppStatusToConnectionStatus(whatsappStatus) {
+        const statusMap = {
+            'disconnected': 'inactive',
+            'connecting': 'connecting', 
+            'connected': 'active',
+            'authenticated': 'active',
+            'error': 'error'
+        };
+        
+        return statusMap[whatsappStatus] || 'inactive';
+    }    
+    
+    getQR() {
         return this.currentQR;
     }
 
-    // Método para verificar el estado del cliente
-    isClientReady() {
-        return this.client && this.isLoggedIn;
-    }
-
-    // Método para obtener el estado del cliente
-    getClientStatus() {
-        return {
-            hasClient: !!this.client,
-            isLoggedIn: this.isLoggedIn,
-            hasWhatsAppBot: !!this.whatsAppBot,
-            hasWhatsAppAdmin: !!this.whatsAppAdmin
-        };
-    }
-
-    // Método para reconectar el cliente
-    async reconnect() {
-        try {
-            structuredLogger.info('WhatsAppWebJsStrategy', 'Starting reconnection process');
-            
-            // Cerrar el cliente actual si existe
-            if (this.client) {
-                structuredLogger.info('WhatsAppWebJsStrategy', 'Closing current client');
-                await this.client.destroy();
-                this.client = null;
-                this.isLoggedIn = false;
-            }
-
-            // Limpiar sesión
-            await this.clearSession();
-            
-            // Reinicializar el cliente
-            structuredLogger.info('WhatsAppWebJsStrategy', 'Reinitializing client');
-            await this.init();
-            
-            structuredLogger.info('WhatsAppWebJsStrategy', 'Reconnection process completed');
-        } catch (error) {
-            structuredLogger.error('WhatsAppWebJsStrategy', 'Error during reconnection', error);
-            throw error;
-        }
-    }
-
-    async updateConnectionRecord(updateData){
-        try {
-            if(!this.connectionRecord){ 
-                structuredLogger.warn('WhatsAppWebJsStrategy', 'Connection record not found', {
-                    clientId: this.clientId
-                });
-                return;
-            }
-
-            //Actualizar solo los campos proporcionados
-            await this.connectionRecord.updateStatus(updateData);
-
-            structuredLogger.info('WhatsAppWebJsStrategy', 'Connection record updated', {
-                clientId: this.clientId,
-                updateData: updateData
-            });
-
-        }catch (error){
-            structuredLogger.error('WhatsAppWebJsStrategy', 'Error updating connection record', error, {    
-                clientId: this.clientId
-            });
-            throw error;
-        }
-    }
-
-    async handleQRTimeout(){
-        this.qrAttempts++;
-
-        structuredLogger.info('WhatsAppWebJsStrategy', 'QR timeout ocurred', {
-            clientId: this.clientId,
-            attempts: this.qrAttempts,
-            maxAttempts: this.maxQrAttempts
-        });
-
-        if(this.qrAttempts >= this.maxQrAttempts){
-            await this.closeConnectionDueToQRTimeout();
-        }
-    }
-
-    async closeConnectionDueToQRTimeout(){
-        try{
-            this.isConnectionClosed = true;
-
-            await this.updateConnectionStatus('disconnected', 'QR timeout occurred');
-
-            if(this.client){
-                await this.client.destroy();
-                this.client = null;
-            }
-
-            this.isLoggedIn = false;
-            this.currentQR = null;
-
-            //Emitir evento de timeout al frontend
-            this.webSocketAdapter.emitToTenant(this.tenantId, 'qrTimeout', {
-                clientId: this.clientId,
-                tenantId: this.tenantId,
-                attempts: this.qrAttempts,
-                maxAttempts: this.maxQrAttempts,
-                message: 'Se alcanzo el maximo de intentos para escanear el QR',
-                timestamp: new Date().toISOString()
-            });
-
-            structuredLogger.info('WhatsAppWebJsStrategy', 'Connection closed due to QR timeout', {
-                clientId: this.clientId,
-                attempts: this.qrAttempts
-            });
-
-        }catch(error){
-            structuredLogger.error('WhatsAppWebJsStrategy', 'Error closing connection due to QR timeout', error, {
-                clientId: this.clientId,
-                attempts: this.qrAttempts
-            });
-        }
-    }
-
-    resetQRAttempts() {
-        this.qrAttempts = 0;
-        this.isConnectionClosed = false;
-        
-        if (this.qrTimeout) {
-            clearTimeout(this.qrTimeout);
-            this.qrTimeout = null;
-        }
-    }
-
-    async restartConnection(){
-        try {
-
-            structuredLogger.info('WhatsAppWebJsStrategy', 'Restarting connection manually', {
-                clientId: this.clientId
-            });
-
-            this.resetQRAttempts();
-
-            if(this.client){
-                await this.client.destroy();
-                this.client = null;
-            }
-
-            this.isLoggedIn = false;
-            this.currentQR = null;
-
-            await this.init();
-
-            structuredLogger.info('WhatsAppWebJsStrategy', 'Connection restarted completed', {
-                clientId: this.clientId
-            });
-        }catch(error){
-            structuredLogger.error('WhatsAppWebJsStrategy', 'Error restarting connection', error, {
-                clientId: this.clientId
-            });
-            throw error;
-        }
-    }
-
-    async cleanup(){
-        if(this.qrTimeout){
-            clearTimeout(this.qrTimeout);
-            this.qrTimeout = null;
-        }
-
-        if(this.client){
-            await this.client.destroy();
-            this.client = null;
-        }
-    }
-
-    setupMessageStatusListeners(){
-        this.client.on('message_ack', async (message, ack)=>{
-            try{
-                let status;
-                switch(ack){
-                    case 1: status = 1; break;// sent
-                    case 2: status = 2; break;//delivered
-                    case 3: status = 3; break;//read
-                    default: status = 0; break;//sending
-                }
-
-                await this.chatService.updateChatSessionStatus(message.id.__serialized, status);
-
-                structuredLogger.debug('WhatsAppWebJsStrategy', 'Message status updated', {
-                    messageId: message.id._serialized,
-                    status
-                });
-            }catch(error){
-                structuredLogger.error('WhatsAppWebJsStrategy', 'Error updating message status', error);
-            }
-        });
-    }
+    isReady() {
+        return this.isLoggedIn && this.isClientReady;
+    }    
 }
 
 module.exports = WhatsAppWebJsStrategy;
