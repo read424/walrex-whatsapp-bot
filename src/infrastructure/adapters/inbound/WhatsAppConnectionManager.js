@@ -1,5 +1,5 @@
 const WhatsAppWebJsStrategy = require('./whatsappWebJsStrategy');
-const { WhatsAppConnection } = require('../../../models');
+const { WhatsAppConnection, Connection } = require('../../../models');
 const { WHATSAPP_LIBRARIES } = require('../../../domain/constants/WhatsAppConstants');
 const structuredLogger = require('../../config/StructuredLogger');
 
@@ -9,6 +9,13 @@ class WhatsAppConnectionManager {
         this.activeConnections = new Map();// Map<clientId, { strategy, connectionRecord, tenantId }>
         this.isInitialized = false;
         this.selectedLibrary = process.env.WHATSAPP_LIBRARY || WHATSAPP_LIBRARIES.WHATSAPP_WEB_JS;
+
+        this.isMonitoring = false;
+        this.monitoringInterval = null;
+        this.reconnectionAttempts = new Map(); // Track reconnection attempts per client
+        this.maxReconnectionAttempts = parseInt(process.env.MAX_RECONNECTION_ATTEMPTS) || 3;
+        this.reconnectionDelay = parseInt(process.env.RECONNECTION_DELAY) || 30000; // 30 seconds
+        this.healthCheckInterval = parseInt(process.env.HEALTH_CHECK_INTERVAL) || 60000; // 1 minute
 
         // Validar la librería seleccionada
         this.validateSelectedLibrary();        
@@ -84,14 +91,14 @@ class WhatsAppConnectionManager {
     /**
      * Restaura conexiones existentes desde la base de datos
     */
-    async restoreConnectionsFromDatabase() {
+    async restoreConnectionsFromDatabase() { 
         try {
             const existingConnections = await WhatsAppConnection.findAll({
                 where: {
                     isActive: true,
                     status: ['authenticated', 'connected']
                 },
-                order: [['updated_at', 'DESC']]
+                order: [['updated_at', 'DESC']],
             });
 
             structuredLogger.info('WhatsAppConnectionManager', 'Found existing connections', {
@@ -133,16 +140,21 @@ class WhatsAppConnectionManager {
             structuredLogger.info('WhatsAppConnectionManager', 'Restoring connection', { clientId });
 
             const strategy = this.createStrategyInstance(clientId, tenantId);
-            strategy.connectionRecord = connectionRecord;
+            strategy.connectionRecord = await Connection.findByPk(connectionRecord.connectionId);
             
-            await strategy.restoreSessionData();
+            await strategy.restoreSessionIfExists();
             await strategy.init();
             
             this.activeConnections.set(clientId, {
                 strategy,
                 connectionRecord,
-                tenantId
+                tenantId,
+                lastHealthCheck: new Date(),
+                reconnectionAttempts: 0
             });
+
+            // Reset reconnection attempts on successful restore
+            this.reconnectionAttempts.delete(clientId);
 
             structuredLogger.info('WhatsAppConnectionManager', 'Connection restored', { clientId });
             
@@ -160,26 +172,28 @@ class WhatsAppConnectionManager {
      */
     async createNewConnection(connectionId, connectionName = null, tenantId = null) {
         try {
-            const finalClientId = connectionName || this.generateClientId();
-            const finalTenantId = tenantId || 1;
+            const finalClientId = connectionId;
+            const finalConnectionName = connectionName;
+            const finalTenantId = tenantId;
             
-            if (this.activeConnections.has(finalClientId)) {
-                const existingConnection = this.activeConnections.get(finalClientId);
+            if (this.activeConnections.has(finalConnectionName)) {
+                const existingConnection = this.activeConnections.get(finalConnectionName);
 
                 if(existingConnection.connectionRecord?.status === 'disconnected' || existingConnection.connectionRecord?.status === 'inactive'){
                     //Limpiar la conexion existente y crear una nueva
                     await existingConnection.strategy.cleanup?.(); 
-                    this.activeConnections.delete(finalClientId);
+                    this.activeConnections.delete(finalConnectionName);
                 }else if (existingConnection.connectionRecord?.status === 'connected' || existingConnection.connectionRecord?.status === 'authenticated') {
-                    throw new Error(`Connection ${finalClientId} already exists with status ${existingConnection.connectionRecord?.status}`);
+                    throw new Error(`Connection ${finalConnectionName} already exists with status ${existingConnection.connectionRecord?.status}`);
                 }
 
                 return {
                     success: true,
                     clientId: finalClientId,
+                    connectionName: finalConnectionName,
                     status: existingConnection.connectionRecord?.status,
                     tenantId: finalTenantId,
-                    message: `Connection ${finalClientId} already exists with status ${existingConnection.connectionRecord?.status}`,
+                    message: `Connection ${finalConnectionName} already exists with status ${existingConnection.connectionRecord?.status}`,
                     qr: existingConnection.strategy.getQRCode(),
                     connectionRecord: {
                         id: existingConnection?.connectionRecord?.id,
@@ -191,86 +205,102 @@ class WhatsAppConnectionManager {
                 };
             }
 
-            structuredLogger.info('WhatsAppConnectionManager', 'Creating new connection', {
-                connectionId: finalClientId,
+            structuredLogger.info('WhatsAppConnectionManager', 'Creating new connection', { 
+                clientId: finalClientId,
+                connectionName: finalConnectionName,
                 tenantId: finalTenantId
             });
 
-            const connectionRecord = await Connection.findOne({
-                where: {
-                    id: connectionId,
-                    tenant_id: finalTenantId,
-                    is_active: true
-                }
-            });
-
-            if(!connectionRecord){
-                throw new Error(`Connection with ID ${finalClientId} not found`);
-            }
-
-            const strategy = this.createStrategyInstance(finalClientId, finalTenantId);
-
-            strategy.connectionRecord = connectionRecord.id;
-
+            const strategy = this.createStrategyInstance(finalConnectionName, finalTenantId);
+            strategy.connectionId = finalClientId;
+            
             await strategy.init();
 
-            await connectionRecord.updateStatus('connecting');
+            const whatsAppConnection = await WhatsAppConnection.getConnectionByName(finalConnectionName);
+            if(!whatsAppConnection){
+                throw new Error(`WhatsApp connection not found for ${finalConnectionName}`);
+            }
+            const connectionRecord = await Connection.findByPk(whatsAppConnection.connectionId);
 
-            const whatsappConnectionRecord = await WhatsAppConnection.getConnectionByClientId(finalClientId);
-
-            this.activeConnections.set(finalClientId, {
+            this.activeConnections.set(finalConnectionName, {
                 strategy,
-                connectionRecord: whatsappConnectionRecord,
-                tenantId: finalTenantId
+                connectionRecord,
+                tenantId: finalTenantId,
+                lastHealthCheck: new Date(),
+                reconnectionAttempts: 0
             });
 
             structuredLogger.info('WhatsAppConnectionManager', 'New connection created', {
-                clientId: finalClientId
+                clientId: finalClientId,
+                connectionId: connectionRecord.id,
+                tenantId: finalTenantId
             });
 
             return {
                 success: true,
                 clientId: finalClientId,
-                status: strategy.connectionRecord?.status || 'connecting',
+                connectionName: finalConnectionName,
                 tenantId: finalTenantId,
-                qr: strategy.getQRCode(),
+                message: 'Connection created successfully',
+                qr: strategy.getQR(),
                 connectionRecord: {
-                    id: whatsappConnectionRecord?.id,
-                    clientId: whatsappConnectionRecord?.clientId,
-                    status: whatsappConnectionRecord?.status,
-                    createdAt: whatsappConnectionRecord?.createdAt,
-                    updatedAt: whatsappConnectionRecord?.updatedAt
-                },
-                message: 'WhatsApp connection created successfully'
+                    id: connectionRecord.id,
+                    clientId: connectionRecord.clientId,
+                    status: connectionRecord.status,
+                    createdAt: connectionRecord.createdAt,
+                    updatedAt: connectionRecord.updatedAt
+                }
             };
 
         } catch (error) {
-            structuredLogger.error('WhatsAppConnectionManager', 'Error creating connection', error, {
-                connectionId,
-                tenantId
-            });
+            structuredLogger.error('WhatsAppConnectionManager', 'Error creating new connection', error);
             throw error;
         }
     }
 
     async restartConnection(clientId, tenantId) {
         try {
-            if(this.activeConnections.has(clientId)){
-                const existingConnection = this.activeConnections.get(clientId);
-                await existingConnection.strategy.cleanup?.();
+            const connectionRecord = await Connection.findOne({
+                where: {
+                    id: clientId,
+                    tenantId: tenantId
+                }
+            });
+            if(!connectionRecord){
+                throw new Error(`Connection ${clientId} not found`);
+            }
+
+            const connectionData = this.activeConnections.get(clientId);
+            
+            if (!connectionData) {
+            }else{
+                const { tenantId, connectionRecord } = connectionData;
+            }
+
+
+            structuredLogger.info('WhatsAppConnectionManager', 'Restarting connection', { clientId });
+
+            // Clean up existing connection
+            if (connectionData.strategy && connectionData.strategy.cleanup) {
+                await connectionData.strategy.cleanup();
                 this.activeConnections.delete(clientId);
             }
+
+            // Reset reconnection attempts
+            this.reconnectionAttempts.delete(clientId);
 
             //Crear nueva conexión
             const strategy = this.createStrategyInstance(clientId, tenantId);
             await strategy.init();
 
-            const connectionRecord = await WhatsAppConnection.getConnectionByClientId(clientId);
+            const updatedConnectionRecord = await WhatsAppConnection.getConnectionByClientId(clientId);
 
             this.activeConnections.set(clientId, {
                 strategy,
-                connectionRecord,
-                tenantId
+                connectionRecord: updatedConnectionRecord,
+                tenantId,
+                lastHealthCheck: new Date(),
+                reconnectionAttempts: 0
             });
 
             return {
@@ -365,36 +395,350 @@ class WhatsAppConnectionManager {
     /**
      * Monitorea todas las conexiones activas
      */
-    async monitorConnections() {
-        try {
+    async monitorConnections() { 
+        if (!this.isInitialized) {
+            structuredLogger.warn('WhatsAppConnectionManager', 'Cannot monitor - manager not initialized');
+            return;
+        }
+
+        try {            
             structuredLogger.debug('WhatsAppConnectionManager', 'Monitoring connections', {
-                totalConnections: this.activeConnections.size
+                totalConnections: this.activeConnections.size,
+                timestamp: new Date().toISOString()
             });
 
+            const monitoringPromises = [];
+
             for (const [clientId, connectionData] of this.activeConnections) {
-                try {
-                    const { strategy, connectionRecord } = connectionData;
-                    const status = strategy.getClientStatus();
-                    
-                    if (!status.isLoggedIn) {
-                        structuredLogger.warn('WhatsAppConnectionManager', 'Connection not authenticated', { clientId });
-                        await connectionRecord.updateStatus('disconnected', 'Lost authentication during monitoring');
-                    } else {
-                        await connectionRecord.update({ lastSeen: new Date() });
-                    }
-                    
-                } catch (connectionError) {
-                    structuredLogger.error('WhatsAppConnectionManager', 'Error monitoring connection', connectionError, { clientId });
-                }
+                monitoringPromises.push(this.monitorSingleConnection(clientId, connectionData));
             }
 
+            // Wait for all monitoring tasks to complete
+            const results = await Promise.allSettled(monitoringPromises);
+
+            // Log monitoring results
+            const successful = results.filter(r => r.status === 'fulfilled').length;
+            const failed = results.filter(r => r.status === 'rejected').length;
+            
+            if (failed > 0) {
+                structuredLogger.warn('WhatsAppConnectionManager', 'Some connections failed monitoring', {
+                    successful,
+                    failed,
+                    totalConnections: this.activeConnections.size
+                });
+            } else {
+                structuredLogger.debug('WhatsAppConnectionManager', 'Monitoring cycle completed', {
+                    successful,
+                    totalConnections: this.activeConnections.size
+                });
+            }            
+
             await this.cleanupOrphanConnections();
+
+            // Check for dead connections and attempt reconnection
+            await this.checkAndReconnectDeadConnections();
+
+            // Broadcast system health status
+            await this.broadcastSystemHealth();            
 
         } catch (error) {
             structuredLogger.error('WhatsAppConnectionManager', 'Error monitoring connections', error);
         }
     }
 
+    async monitorSingleConnection(clientId, connectionData) {
+        try {
+            const { strategy, connectionRecord, tenantId } = connectionData;
+            
+            // Get current connection state
+            const connectionState = strategy.getConnectionState ? strategy.getConnectionState() : {
+                isLoggedIn: strategy.isLoggedIn || false,
+                isClientReady: strategy.isClientReady || false,
+                hasClient: !!strategy.client
+            };
+
+            structuredLogger.debug('WhatsAppConnectionManager', 'Monitoring connection', {
+                clientId,
+                state: connectionState,
+                lastHealthCheck: connectionData.lastHealthCheck
+            });
+
+            // Update last health check
+            connectionData.lastHealthCheck = new Date();
+
+            // Check if connection is healthy
+            if (!connectionState.isLoggedIn || !connectionState.isClientReady) {
+                structuredLogger.warn('WhatsAppConnectionManager', 'Connection unhealthy detected', {
+                    clientId,
+                    isLoggedIn: connectionState.isLoggedIn,
+                    isClientReady: connectionState.isClientReady,
+                    hasClient: connectionState.hasClient
+                });
+
+                // Mark connection as unhealthy
+                await connectionRecord.updateStatus('disconnected', 'Connection lost during monitoring');
+                
+                // Add to reconnection queue
+                await this.scheduleReconnection(clientId, connectionData);
+                
+            } else {
+                // Connection is healthy, update database
+                await connectionRecord.update({ 
+                    lastSeen: new Date(),
+                    status: 'connected'
+                });
+
+                // Reset reconnection attempts if connection is healthy
+                connectionData.reconnectionAttempts = 0;
+                this.reconnectionAttempts.delete(clientId);
+            }
+
+        } catch (error) {
+            structuredLogger.error('WhatsAppConnectionManager', 'Error monitoring single connection', error, { clientId });
+            
+            // If monitoring fails, schedule reconnection
+            await this.scheduleReconnection(clientId, connectionData);
+        }
+    }    
+
+    async scheduleReconnection(clientId, connectionData) {
+        const currentAttempts = this.reconnectionAttempts.get(clientId) || 0;
+        
+        if (currentAttempts >= this.maxReconnectionAttempts) {
+            structuredLogger.error('WhatsAppConnectionManager', 'Max reconnection attempts reached', {
+                clientId,
+                attempts: currentAttempts,
+                maxAttempts: this.maxReconnectionAttempts
+            });
+
+            // Mark connection as permanently failed
+            await connectionData.connectionRecord.updateStatus('failed', 'Max reconnection attempts exceeded');
+            
+            // Remove from active connections
+            this.activeConnections.delete(clientId);
+            this.reconnectionAttempts.delete(clientId);
+            
+            // Notify via WebSocket
+            this.webSocketAdapter.emitToTenant(connectionData.tenantId, 'connection_failed', {
+                clientId,
+                reason: 'Max reconnection attempts exceeded',
+                attempts: currentAttempts
+            });
+
+            return;
+        }
+
+        // Increment attempt counter
+        this.reconnectionAttempts.set(clientId, currentAttempts + 1);
+
+        structuredLogger.info('WhatsAppConnectionManager', 'Scheduling reconnection', {
+            clientId,
+            attempt: currentAttempts + 1,
+            maxAttempts: this.maxReconnectionAttempts,
+            delayMs: this.reconnectionDelay
+        });
+
+        // Schedule reconnection after delay
+        setTimeout(async () => {
+            await this.attemptReconnection(clientId, connectionData);
+        }, this.reconnectionDelay);
+    }
+
+    async attemptReconnection(clientId, connectionData) {
+        const currentAttempt = this.reconnectionAttempts.get(clientId) || 0;
+        
+        try {
+            structuredLogger.info('WhatsAppConnectionManager', 'Attempting reconnection', {
+                clientId,
+                attempt: currentAttempt,
+                timestamp: new Date().toISOString()
+            });
+
+            const { strategy, connectionRecord, tenantId } = connectionData;
+
+            // Update status to connecting
+            await connectionRecord.updateStatus('connecting', `Reconnection attempt ${currentAttempt}`);
+
+            // Clean up existing strategy
+            if (strategy && strategy.cleanup) {
+                await strategy.cleanup();
+            }
+
+            // Create new strategy instance
+            const newStrategy = this.createStrategyInstance(clientId, tenantId);
+            newStrategy.connectionRecord = connectionRecord;
+
+            // Try to restore session first
+            await newStrategy.restoreSessionIfExists();
+            
+            // Initialize new connection
+            await newStrategy.init();
+
+            // Update active connections map
+            this.activeConnections.set(clientId, {
+                strategy: newStrategy,
+                connectionRecord,
+                tenantId,
+                lastHealthCheck: new Date(),
+                reconnectionAttempts: currentAttempt
+            });
+
+            structuredLogger.info('WhatsAppConnectionManager', 'Reconnection successful', {
+                clientId,
+                attempt: currentAttempt
+            });
+
+            // Reset reconnection attempts
+            this.reconnectionAttempts.delete(clientId);
+
+            // Notify success
+            this.webSocketAdapter.emitToTenant(tenantId, 'connection_restored', {
+                clientId,
+                attempt: currentAttempt,
+                timestamp: new Date().toISOString()
+            });
+
+        } catch (error) {
+            structuredLogger.error('WhatsAppConnectionManager', 'Reconnection failed', error, {
+                clientId,
+                attempt: currentAttempt
+            });
+
+            // Update connection record with error
+            await connectionData.connectionRecord.updateStatus('error', 
+                `Reconnection attempt ${currentAttempt} failed: ${error.message}`);
+
+            // Schedule next attempt if not exceeded max
+            if (currentAttempt < this.maxReconnectionAttempts) {
+                await this.scheduleReconnection(clientId, connectionData);
+            }
+        }
+    }
+    
+    async checkAndReconnectDeadConnections() {
+        try {
+            const deadConnectionThreshold = new Date(Date.now() - (5 * 60 * 1000)); // 5 minutes ago
+            
+            for (const [clientId, connectionData] of this.activeConnections) {
+                const { lastHealthCheck, strategy, connectionRecord } = connectionData;
+                
+                // Check if connection hasn't been checked recently
+                if (lastHealthCheck < deadConnectionThreshold) {
+                    structuredLogger.warn('WhatsAppConnectionManager', 'Dead connection detected', {
+                        clientId,
+                        lastHealthCheck: lastHealthCheck.toISOString(),
+                        threshold: deadConnectionThreshold.toISOString()
+                    });
+
+                    // Mark as dead and schedule reconnection
+                    await connectionRecord.updateStatus('dead', 'No recent health check');
+                    await this.scheduleReconnection(clientId, connectionData);
+                }
+            }
+
+        } catch (error) {
+            structuredLogger.error('WhatsAppConnectionManager', 'Error checking dead connections', error);
+        }
+    }
+
+    startMonitoring(intervalMs = null) {
+        if (this.isMonitoring) {
+            structuredLogger.warn('WhatsAppConnectionManager', 'Monitoring already started');
+            return;
+        }
+
+        const interval = intervalMs || this.healthCheckInterval;
+        
+        structuredLogger.info('WhatsAppConnectionManager', 'Starting connection monitoring', {
+            intervalMs: interval,
+            maxReconnectionAttempts: this.maxReconnectionAttempts,
+            reconnectionDelay: this.reconnectionDelay
+        });
+
+        this.isMonitoring = true;
+        this.monitoringInterval = setInterval(() => {
+            this.monitorConnections().catch(error => {
+                structuredLogger.error('WhatsAppConnectionManager', 'Monitoring interval error', error);
+            });
+        }, interval);
+
+        // Also run immediate check
+        this.monitorConnections();
+    }
+
+    stopMonitoring() {
+        if (!this.isMonitoring) {
+            return;
+        }
+
+        structuredLogger.info('WhatsAppConnectionManager', 'Stopping connection monitoring');
+        
+        if (this.monitoringInterval) {
+            clearInterval(this.monitoringInterval);
+            this.monitoringInterval = null;
+        }
+        
+        this.isMonitoring = false;
+    }
+
+    getMonitoringStatus() {
+        const activeConnections = Array.from(this.activeConnections.entries()).map(([clientId, data]) => ({
+            clientId,
+            tenantId: data.tenantId,
+            status: data.connectionRecord.status,
+            lastHealthCheck: data.lastHealthCheck,
+            reconnectionAttempts: data.reconnectionAttempts || 0
+        }));
+
+        const reconnectionQueue = Array.from(this.reconnectionAttempts.entries()).map(([clientId, attempts]) => ({
+            clientId,
+            attempts
+        }));
+
+        return {
+            isMonitoring: this.isMonitoring,
+            totalConnections: this.activeConnections.size,
+            activeConnections,
+            reconnectionQueue,
+            maxReconnectionAttempts: this.maxReconnectionAttempts,
+            reconnectionDelay: this.reconnectionDelay,
+            healthCheckInterval: this.healthCheckInterval
+        };
+    }
+
+    async broadcastSystemHealth() {
+        try {
+            const status = this.getMonitoringStatus();
+            const healthyConnections = status.activeConnections.filter(c => 
+                c.status === 'connected' || c.status === 'authenticated'
+            ).length;
+
+            const healthStatus = {
+                status: 'healthy',
+                totalConnections: status.totalConnections,
+                healthyConnections,
+                unhealthyConnections: status.totalConnections - healthyConnections,
+                reconnectionQueue: status.reconnectionQueue.length,
+                timestamp: new Date().toISOString()
+            };
+
+            // Determine overall health
+            if (healthyConnections === 0 && status.totalConnections > 0) {
+                healthStatus.status = 'critical';
+            } else if (healthyConnections < status.totalConnections) {
+                healthStatus.status = 'warning';
+            }
+
+            this.webSocketAdapter.broadcast({
+                type: 'system_health',
+                data: healthStatus
+            });
+
+        } catch (error) {
+            structuredLogger.error('WhatsAppConnectionManager', 'Error broadcasting system health', error);
+        }
+    }
+    
     /**
      * Limpia conexiones huérfanas en la base de datos
      */
@@ -463,7 +807,7 @@ class WhatsAppConnectionManager {
      * Genera un ID único para cliente
      */
     generateClientId() {
-        return `client-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        return `client-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
     }
 
     /**
@@ -486,6 +830,34 @@ class WhatsAppConnectionManager {
         this.activeConnections.clear();
         this.isInitialized = false;
     }
+
+    async shutdown() {
+        structuredLogger.info('WhatsAppConnectionManager', 'Starting graceful shutdown');
+        
+        // Stop monitoring
+        this.stopMonitoring();
+        
+        // Disconnect all connections
+        const disconnectPromises = Array.from(this.activeConnections.entries()).map(
+            async ([clientId, connectionData]) => {
+                try {
+                    if (connectionData.strategy && connectionData.strategy.cleanup) {
+                        await connectionData.strategy.cleanup();
+                    }
+                    structuredLogger.info('WhatsAppConnectionManager', 'Connection cleaned up', { clientId });
+                } catch (error) {
+                    structuredLogger.error('WhatsAppConnectionManager', 'Error cleaning up connection', error, { clientId });
+                }
+            }
+        );
+
+        await Promise.allSettled(disconnectPromises);
+        
+        this.activeConnections.clear();
+        this.reconnectionAttempts.clear();
+        
+        structuredLogger.info('WhatsAppConnectionManager', 'Graceful shutdown completed');
+    }    
 }
 
 module.exports = WhatsAppConnectionManager;
