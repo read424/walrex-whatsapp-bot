@@ -371,7 +371,6 @@ class AdminConnectionManager {
 
             // Limpiar datos de sesion
             await connection.update({
-                sessionData: null,
                 qrCode: null,
                 status: 'disconnected',
                 lastError: 'Connection reset',
