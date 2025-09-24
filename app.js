@@ -50,6 +50,8 @@ app.use('/api', routes);
 (async ()=> {
     try{
         structuredLogger.info('APP', 'Initializing WhatsApp connection system');
+        
+        // Inicializar el sistema (incluye restauración automática de conexiones)
         await connectionManager.initialize();
 
         // Iniciar monitoreo cada 30 segundos

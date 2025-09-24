@@ -50,10 +50,10 @@ class WhatsAppConnectionManager {
     /**
      * Crea una instancia de la estrategia según la librería seleccionada
      */
-    createStrategyInstance(connectionName, tenantId) {
+    createStrategyInstance(connectionId, tenantId) {
         switch (this.selectedLibrary) {
             case WHATSAPP_LIBRARIES.WHATSAPP_WEB_JS:
-                return new WhatsAppWebJsStrategy(this.webSocketAdapter, connectionName, tenantId);
+                return new WhatsAppWebJsStrategy(this.webSocketAdapter, connectionId, tenantId);
             
             default:
                 throw new Error(`Strategy for library '${this.selectedLibrary}' not implemented`);
@@ -133,18 +133,31 @@ class WhatsAppConnectionManager {
     /**
      * Restaura una conexión específica
      */
-    async restoreConnection(connectionRecord) {
-        const { clientId, tenantId } = connectionRecord;
+    async restoreConnection(whatsappConnectionRecord) {
+        const { clientId, tenantId, connectionId } = whatsappConnectionRecord;
         
         try {
-            structuredLogger.info('WhatsAppConnectionManager', 'Restoring connection', { clientId });
+            structuredLogger.info('WhatsAppConnectionManager', 'Restoring connection', { 
+                clientId, 
+                tenantId,
+                connectionId 
+            });
 
+            // Crear estrategia usando clientId como connectionName
             const strategy = this.createStrategyInstance(clientId, tenantId);
-            strategy.connectionRecord = await Connection.findByPk(connectionRecord.connectionId);
+            
+            // Obtener el registro de Connection relacionado
+            const connectionRecord = await Connection.findByPk(connectionId);
+            if (!connectionRecord) {
+                throw new Error(`Connection record not found for connectionId: ${connectionId}`);
+            }
+            
+            strategy.connectionRecord = connectionRecord;
             
             await strategy.restoreSessionIfExists();
             await strategy.init();
             
+            // Usar clientId como índice en activeConnections
             this.activeConnections.set(clientId, {
                 strategy,
                 connectionRecord,
@@ -156,14 +169,49 @@ class WhatsAppConnectionManager {
             // Reset reconnection attempts on successful restore
             this.reconnectionAttempts.delete(clientId);
 
-            structuredLogger.info('WhatsAppConnectionManager', 'Connection restored', { clientId });
+            structuredLogger.info('WhatsAppConnectionManager', 'Connection restored successfully', { 
+                clientId,
+                tenantId
+            });
             
             return strategy;
 
         } catch (error) {
-            structuredLogger.error('WhatsAppConnectionManager', 'Failed to restore connection', error, { clientId });
-            await connectionRecord.updateStatus('error', `Restoration failed: ${error.message}`);
+            structuredLogger.error('WhatsAppConnectionManager', 'Failed to restore connection', error, { 
+                clientId,
+                tenantId,
+                connectionId
+            });
+            
+            // Marcar como desconectada en la base de datos
+            await this.markConnectionAsDisconnected(whatsappConnectionRecord.id, error.message);
             throw error;
+        }
+    }
+
+    /**
+     * Marca una conexión como desconectada en la base de datos
+     */
+    async markConnectionAsDisconnected(whatsappConnectionId, errorMessage = null) {
+        try {
+            // Actualizar el registro de WhatsAppConnection
+            await WhatsAppConnection.update(
+                { 
+                    status: 'disconnected',
+                    last_error: errorMessage || 'Connection restoration failed'
+                },
+                { where: { id: whatsappConnectionId } }
+            );
+
+            structuredLogger.info('WhatsAppConnectionManager', 'Connection marked as disconnected', {
+                whatsappConnectionId,
+                errorMessage
+            });
+
+        } catch (error) {
+            structuredLogger.error('WhatsAppConnectionManager', 'Failed to mark connection as disconnected', error, {
+                whatsappConnectionId
+            });
         }
     }
 
