@@ -52,10 +52,11 @@ class ChatSessionRepository {
             const session = await ChatSession.findOne({
                 where: { 
                     phone_number: phoneNumber, 
-                    [ Op.or ]: [
-                        { ended_at: null },
-                        { ended_at: { [ Op.gt]: tenMinutesAgo } }
-                    ]
+                    status: 'active',
+                    //[ Op.or ]: [
+                    //    { ended_at: null },
+                    //    { ended_at: { [ Op.gt]: tenMinutesAgo } }
+                    //]
                 }
             });
             return session;
