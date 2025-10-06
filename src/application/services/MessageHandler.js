@@ -48,16 +48,17 @@ class MessageHandler {
 
             // Obtener o crear sesión de chat
             const chatSession = await this.getOrCreateChatSession(phoneNumber);
-            const chatMessage = await this.saveChatMessage(phoneNumber, message.body, chatSession.id);
 
             // Manejar el mensaje según el tipo de sesión
-            await this.processMessageBySessionType(phoneNumber, message, chatSession, chatMessage);
+            const chatMessage = await this.processMessageBySessionType(phoneNumber, message, chatSession, null);
 
             structuredLogger.performance('MessageHandler', 'handleMessage_success', Date.now() - startTime, {
                 phoneNumber,
                 sessionId: chatSession.id,
                 messageId: chatMessage.id
             });
+
+
 
         } catch (error) {
             structuredLogger.error('MessageHandler', 'Error handling message', error, {
@@ -109,9 +110,9 @@ class MessageHandler {
         const session = this.sessionManager.getSession(phoneNumber);
 
         if (session.stage === 'registration') {
-            await this.handleRegistrationMessage(phoneNumber, message, session);
+            await this.handleRegistrationMessage(phoneNumber, message, session, chatSession);
         } else {
-            await this.handleChatBotSession(phoneNumber, message);
+            return await this.handleChatBotSession(phoneNumber, message,  chatSession);
         }
     }
 
@@ -121,13 +122,13 @@ class MessageHandler {
      * @param {Object} message - Mensaje completo
      * @param {Object} session - Sesión del usuario
      */
-    async handleRegistrationMessage(phoneNumber, message, session) {
+    async handleRegistrationMessage(phoneNumber, message, session, chatSession) {
         structuredLogger.info('MessageHandler', `Handling registration message for: ${phoneNumber}, stage: ${session.stage}`);
 
         const response = await this.registrationProcessor.processRegistrationMessage(phoneNumber, message, session);
         
         if (response && response !== '') {
-            await this.whatsappClient.sendMessage(phoneNumber, response);
+            await this.whatsappClient.sendMessage(phoneNumber, response, chatSession);
         }
     }
 
@@ -136,7 +137,7 @@ class MessageHandler {
      * @param {string} phoneNumber - Número de teléfono
      * @param {Object} message - Mensaje completo
      */
-    async handleChatBotSession(phoneNumber, message) {
+    async handleChatBotSession(phoneNumber, message, chatSession) {
         structuredLogger.info('MessageHandler', `Handling chatbot session for: ${phoneNumber}`, {
             messageBody: message.body?.substring(0, 50) + '...'
         });
@@ -169,30 +170,46 @@ class MessageHandler {
         }
 
         // Enviar respuesta (solo una vez)
-        if (responseMessage !== '') {
-            structuredLogger.info('MessageHandler', `Preparing to send response`, {
-                phoneNumber,
-                responseLength: responseMessage.length,
-                hasWhatsAppClient: !!this.whatsappClient
-            });
-            
-            try {
-                // Intentar enviar el mensaje una sola vez
-                await this.whatsappClient.sendMessage(phoneNumber, responseMessage);
-                structuredLogger.info('MessageHandler', 'Response sent successfully', {
-                    phoneNumber,
-                    responseLength: responseMessage.length
-                });
-            } catch (error) {
-                structuredLogger.error('MessageHandler', 'Failed to send response', {
-                    phoneNumber,
-                    responseLength: responseMessage.length,
-                    error: error.message
-                });
-                // No reintentar para evitar envíos múltiples
-            }
+        if (responseMessage !== '') {          
+            return await this.sendAndSaveResponse(phoneNumber, responseMessage, chatSession);
         }
     }
+
+    /**
+     * Envía un mensaje y lo guarda en la base de datos
+     * @param {string} phoneNumber - Número de teléfono
+     * @param {string} responseMessage - Mensaje a enviar
+     * @param {Object} chatSession - Sesión de chat
+     */
+    async sendAndSaveResponse(phoneNumber, responseMessage, chatSession) {
+        structuredLogger.info('MessageHandler', `Preparing to send response`, {
+            phoneNumber,
+            responseLength: responseMessage.length,
+            hasWhatsAppClient: !!this.whatsappClient
+        });
+        
+        try {
+            // 1. Enviar el mensaje por WhatsApp
+            const sentMessage = await this.whatsappClient.sendMessage(phoneNumber, responseMessage);
+            
+            structuredLogger.info('MessageHandler', 'Response sent successfully', {
+                phoneNumber,
+                responseLength: responseMessage.length
+            });
+
+            // 2. Guardar mensaje SALIENTE en la base de datos
+            return await this.saveOutgoingMessage(phoneNumber, responseMessage, chatSession, sentMessage?.id?.id);
+
+        } catch (error) {
+            structuredLogger.error('MessageHandler', 'Failed to send response', {
+                phoneNumber,
+                responseLength: responseMessage.length,
+                error: error.message
+            });
+            throw error;
+        }
+    }
+    
 
     /**
      * Procesa el menú actual
@@ -400,13 +417,67 @@ class MessageHandler {
      * @returns {Object} - Sesión de chat
      */
     async getOrCreateChatSession(phoneNumber) {
-        let chatSession = await this.useCases.addChatSession.getEnabledSessionChat(phoneNumber);
+        structuredLogger.info('MessageHandler', 'Getting or creating chat session', {
+            phoneNumber
+        });
+        const lcNumberPhone = phoneNumber.replace('@c.us', '')
+        let chatSession = await this.useCases.addChatSession.getEnabledSessionChat(lcNumberPhone);
         if (!chatSession) {
-            chatSession = await this.useCases.addChatSession.addChatSession(phoneNumber);
+            chatSession = await this.useCases.addChatSession.addChatSession(lcNumberPhone);
         }
         return chatSession;
     }
 
+    /**
+     * Guarda un mensaje ENTRANTE (del usuario) en la base de datos
+     * @param {string} phoneNumber - Número de teléfono
+     * @param {string} messageBody - Cuerpo del mensaje
+     * @param {Object} chatSession - Sesión de chat
+     * @returns {Object} - Mensaje guardado
+     */
+    async saveIncomingMessage(phoneNumber, messageBody, chatSession) {
+        structuredLogger.info('MessageHandler', 'Saving incoming message', {
+            phoneNumber,
+            sessionId: chatSession.id,
+            messageLength: messageBody?.length
+        });
+
+        return await this.useCases.addChatMessage.addIncomingMessage({
+            phoneNumber,
+            content: messageBody,
+            sessionId: chatSession.id,
+            contactId: chatSession.contact_id,
+            tenantId: chatSession.tenant_id
+        });
+    }    
+    
+    /**
+     * Guarda un mensaje SALIENTE (del bot) en la base de datos
+     * @param {string} phoneNumber - Número de teléfono
+     * @param {string} messageBody - Cuerpo del mensaje
+     * @param {Object} chatSession - Sesión de chat
+     * @param {string} whatsappMessageId - ID del mensaje de WhatsApp
+     * @returns {Object} - Mensaje guardado
+    */
+    async saveOutgoingMessage(phoneNumber, messageBody, chatSession, whatsappMessageId = null) {
+        structuredLogger.info('MessageHandler', 'Saving outgoing message', {
+            phoneNumber,
+            sessionId: chatSession.id,
+            messageLength: messageBody?.length
+        });
+
+        return await this.useCases.addChatMessage.addOutgoingMessage({
+            phoneNumber,
+            content: messageBody,
+            sessionId: chatSession.id,
+            contactId: chatSession.contact_id,
+            tenantId: chatSession.tenant_id,
+            whatsappMessageId,
+            responderType: 'bot'
+        });
+    }
+    
+    
     /**
      * Guarda un mensaje de chat
      * @param {string} phoneNumber - Número de teléfono
