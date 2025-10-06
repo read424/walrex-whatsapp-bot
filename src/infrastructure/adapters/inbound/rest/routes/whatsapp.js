@@ -432,8 +432,12 @@ router.post('/typing', (req, res) => {
 
 router.post('/restart-connection', async (req, res) => {
     try {
+        structuredLogger.info('WHATSAPP_ROUTES', 'Restarting connection', {
+            request: req.body,
+            tenantId: req.headers['x-tenant-id']
+        });
         const { clientId } = req.body;
-        const tenantId = req.headers['X-Tenant-Id'] || 1;
+        const tenantId = req.headers['x-tenant-id'] ? parseInt(req.headers['x-tenant-id']) : null;
 
         if(!clientId || !tenantId){
             return res.status(400).json({
