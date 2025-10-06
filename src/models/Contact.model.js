@@ -6,19 +6,15 @@ class Contact extends Model {
         // Un contacto puede tener muchas sesiones de chat
         Contact.hasMany(models.ChatSession, {
             foreignKey: 'contact_id',
-            sourceKey: 'id'
+            sourceKey: 'id',
+            as: 'chatSessions'
         });
 
         // Un contacto puede tener muchos mensajes
         Contact.hasMany(models.ChatMessage, {
             foreignKey: 'contact_id',
-            sourceKey: 'id'
-        });
-
-        // Un contacto pertenece a una conexión
-        Contact.belongsTo(models.Connection, {
-            foreignKey: 'connection_id',
-            targetKey: 'id'
+            sourceKey: 'id',
+            as: 'messages'
         });
     }
 }

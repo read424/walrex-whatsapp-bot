@@ -1,6 +1,6 @@
 const { Contact, ChatSession, ChatMessage} = require('../../models');
 const { WhatsAppConnection } = require('../../models');
-const structuredLogger = require('../../infrastructure/config/LoggerConfig');
+const structuredLogger = require('../../infrastructure/config/StructuredLogger');
 
 class ChatService {
     constructor(webSocketAdapter){
@@ -9,6 +9,7 @@ class ChatService {
 
     async processIncomingMessage(whatsappMessage, connectionId, tenantId){
         try {
+            structuredLogger.info('ChatService', 'Process Message Incoming', {whatsappMessage, connectionId, tenantId});
             const contact = await this.findOrCreateContact(
                 whatsappMessage.from.replace('@c.us', ''),
                 whatsappMessage._data.notifyName || whatsappMessage.from.replace('@c.us', ''),
@@ -18,20 +19,21 @@ class ChatService {
             const chatSession = await this.findOrCreateChatSession(
                 contact.id,
                 connectionId,
-                tenantId
+                tenantId,
+                whatsappMessage.from.replace('@c.us', '')
             );
 
 
             const message = await this.createChatMessage({
-                chatSessionId:chatSession.id,
-                contactId:contact.id,
+                chat_session_id:chatSession.id,
+                contact_id:contact.id,
                 content: whatsappMessage.body,
-                messageType: this.getMessageType(whatsappMessage),
+                message_type: this.getMessageType(whatsappMessage),
                 direction: 'incoming',
-                whatsappMessageId: whatsappMessage.id._serialized,
-                mediaUrl: await this.extractMediaUrl(whatsappMessage),
-                mediaMetadata: await this.extractMediaMetadata(whatsappMessage),
-                tenantId 
+                whatsapp_message_id: whatsappMessage.id._serialized,
+                media_url: await this.extractMediaUrl(whatsappMessage),
+                media_metadata: await this.extractMediaMetadata(whatsappMessage),
+                tenant_id: parseInt(tenantId) 
             });
 
             await this.webSocketAdapter.emitToTenant(tenantId, 'newMessage', {
@@ -55,44 +57,55 @@ class ChatService {
     }
 
     async findOrCreateContact(phoneNumber, name, tenantId){
-        let contact = await Contact.findOne({
-            where: {
-                phoneNumber,
-                tenantId
-            }
-        });
-
-        if(!contact){
-            contact = await Contact.create({
+        try{
+            structuredLogger.info('ChatService', 'New contact created', {
                 phoneNumber,
                 name,
-                tenantId,
-                metadata: {
-                    source: 'whatsapp',
-                    createdFrom: 'incoming_message'
+                tenantId
+            });
+            const recordContact = await Contact.findOne({
+                where: {
+                    phone_number: phoneNumber,
+                    tenant_id: parseInt(tenantId)
                 }
             });
-
-            structuredLogger.info('ChatService', 'New contact created', {
-                contactId: contact.id,
-                phoneNumber,
-                name
-            });
-        }else if(contact.name !== name && name){
-            contact.name = name;
-            await contact.save();
+            structuredLogger.info('ChatService', 'Record Contact', recordContact);
+            if(!recordContact){
+                const contact = await Contact.create({
+                    phone_number: phoneNumber,
+                    name,
+                    tenant_id: parseInt(tenantId),
+                    metadata: {
+                        source: 'whatsapp',
+                        createdFrom: 'incoming_message'
+                    }
+                });
+                structuredLogger.info('ChatService', 'Create Contact', contact);
+                return contact;
+            }else if(recordContact.name !== name && name){
+                recordContact.name = name;
+                await recordContact.save();
+                structuredLogger.info('ChatService', 'Update Contact', recordContact);
+            }        
+            return recordContact;
+        }catch(error){
+            throw error;
         }
-
-        return contact;
     }
 
-    async findOrCreateChatSession(contactId, connectionId, tenantId){
+    async findOrCreateChatSession(contactId, connectionId, tenantId, phoneNumber){
+        structuredLogger.info('ChatService', 'Find or create chat session', {
+            contactId,
+            connectionId,
+            tenantId,
+            phoneNumber
+        });
         let chatSession = await ChatSession.findOne({
             where: {
-                contactId,
-                connectionId,
+                contact_id: parseInt(contactId),
+                connection_id: connectionId,
                 status: 'active',
-                tenantId
+                tenant_id: tenantId
             },
             include: [
                 { model: Contact, as: 'contact' }
@@ -101,10 +114,11 @@ class ChatService {
 
         if(!chatSession){
             chatSession = await ChatSession.create({
-                contactId,
-                connectionId,
+                contact_id: contactId,
+                phone_number: phoneNumber,
+                connection_id: connectionId,
                 status: 'active',
-                tenantId,
+                tenant_id: tenantId,
                 startedAt: new Date(),
                 metadata: {
                     source: 'whatsapp',
@@ -118,8 +132,8 @@ class ChatService {
 
             structuredLogger.info('ChatService', 'New chat session created', {
                 sessionId: chatSession.id,
-                contactId,
-                connectionId
+                contact_id: contactId,
+                connection_id: connectionId
             });
         }
 
@@ -258,8 +272,17 @@ class ChatService {
     }
 
     async updateChatSessionStatus(whatsappMessageId, status){
+        // Validar que whatsappMessageId no sea undefined o null
+        if (!whatsappMessageId) {
+            structuredLogger.warn('ChatService', 'updateChatSessionStatus called with invalid whatsappMessageId', {
+                whatsappMessageId,
+                status
+            });
+            return;
+        }
+
         const message = await ChatMessage.findOne({
-            where: { whatsappMessageId }
+            where: { whatsapp_message_id: whatsappMessageId }
         });
 
         if(message){
@@ -268,6 +291,11 @@ class ChatService {
 
             this.webSocketAdapter.emitToTenant(message.tenantId, 'messageStatusUpdated', {
                 messageId: message.id,
+                whatsappMessageId,
+                status
+            });
+        } else {
+            structuredLogger.warn('ChatService', 'Message not found for whatsappMessageId', {
                 whatsappMessageId,
                 status
             });

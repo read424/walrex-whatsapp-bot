@@ -1,5 +1,9 @@
+// Configurar variables de entorno según el ambiente
 const env = process.env.NODE_ENV || 'development';
-require('dotenv').config({ path: `.env.${env}`});
+const envFile = `.env.${env}`;
+
+require('dotenv').config({ path: envFile });
+
 const express = require('express');
 const bodyParser = require('body-parser');
 const cors = require('cors');
@@ -50,10 +54,12 @@ app.use('/api', routes);
 (async ()=> {
     try{
         structuredLogger.info('APP', 'Initializing WhatsApp connection system');
+        
+        // Inicializar el sistema (incluye restauración automática de conexiones)
         await connectionManager.initialize();
 
         // Iniciar monitoreo cada 30 segundos
-        setInterval(() => connectionManager.monitorConnections(), MONITORING_INTERVAL);
+        //setInterval(() => connectionManager.monitorConnections(), MONITORING_INTERVAL);
 
         structuredLogger.info('APP', 'WhatsApp context initialized successfully', {
             action: 'context_initialized'

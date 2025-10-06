@@ -9,11 +9,8 @@ class Connection extends Model {
             sourceKey: 'id'
         });
 
-        // Una conexión puede tener muchos contactos
-        Connection.hasMany(models.Contact, {
-            foreignKey: 'connection_id',
-            sourceKey: 'id'
-        });
+        // La relación con Contact se maneja a través de ChatSession
+        // Connection -> ChatSession -> Contact
     }
 }
 

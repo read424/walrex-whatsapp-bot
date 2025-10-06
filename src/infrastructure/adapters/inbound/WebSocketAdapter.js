@@ -132,18 +132,18 @@ class WebSocketAdapter extends WebSocketPort {
     /**
      * Emite QR específicamente a un tenant
      */
-    emitQRToTenant(tenantId, qrData) {
+    emitQRToTenant(clientId, qrData) {
         const payload = {
-            tenantId: String(tenantId),
+            tenantId: String(qrData.tenantId),
             clientId: qrData.clientId,
             qr: qrData.qr, // Agregar ambos nombres por compatibilidad
             timestamp: new Date().toISOString(),
             message: 'Scan this QR code with WhatsApp'
         };
 
-        console.log('📱 Emitting QR to tenant:', tenantId, 'Client:', qrData.clientId);
+        console.log('📱 Emitting QR to tenant:', qrData.tenantId, 'Client:', clientId);
 
-        this.emitToTenant(tenantId, 'qrCode', payload);
+        this.emitToTenant(clientId, 'qrCode', payload);
     }
 
     /**

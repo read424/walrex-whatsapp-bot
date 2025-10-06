@@ -6,7 +6,8 @@ class ChatSession extends Model {
         // Una sesión pertenece a un contacto
         ChatSession.belongsTo(models.Contact, {
             foreignKey: 'contact_id',
-            targetKey: 'id'
+            targetKey: 'id',
+            as: 'contact'
         });
 
         // Una sesión pertenece a una conexión
@@ -24,7 +25,8 @@ class ChatSession extends Model {
         // Una sesión tiene muchos mensajes
         ChatSession.hasMany(models.ChatMessage, {
             foreignKey: 'chat_session_id',
-            sourceKey: 'id'
+            sourceKey: 'id',
+            as: 'messages'
         });
     }
 }
@@ -45,11 +47,16 @@ ChatSession.init({
         },
         comment: 'ID del contacto asociado'
     },
+    phone_number: {
+        type: DataTypes.STRING(20),
+        allowNull: false,
+        comment: 'Número de teléfono del contacto'
+    },
     connection_id: {
         type: DataTypes.INTEGER,
         allowNull: false,
         references: {
-            model: 'whatsapp_connections',
+            model: 'connections',
             key: 'id'
         },
         comment: 'ID de la conexión WhatsApp'
@@ -98,8 +105,8 @@ ChatSession.init({
     modelName: 'ChatSession', 
     tableName: 'chat_sessions',
     timestamps: true,
-    createdAt: 'created_at',
-    updatedAt: 'updated_at',
+    createdAt: 'createdAt',
+    updatedAt: 'updatedAt',
     indexes: [
         {
             fields: ['contact_id'],

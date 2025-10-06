@@ -6,13 +6,15 @@ class ChatMessage extends Model {
         // Un mensaje pertenece a una sesión de chat
         ChatMessage.belongsTo(models.ChatSession, {
             foreignKey: 'chat_session_id',
-            targetKey: 'id'
+            targetKey: 'id',
+            as: 'chatSession'
         });
 
         // Un mensaje pertenece a un contacto
         ChatMessage.belongsTo(models.Contact, {
             foreignKey: 'contact_id',
-            targetKey: 'id'
+            targetKey: 'id',
+            as: 'contact'
         });
 
         // Un mensaje puede ser respondido por un asesor
@@ -123,8 +125,8 @@ ChatMessage.init({
     modelName: 'ChatMessage', 
     tableName: 'chat_messages',
     timestamps: true,
-    createdAt: 'created_at',
-    updatedAt: 'updated_at',
+    createdAt: 'createdAt',
+    updatedAt: 'updatedAt',
     indexes: [
         {
             fields: ['chat_session_id'],
