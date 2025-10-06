@@ -99,6 +99,11 @@ class WhatsAppConnectionManager {
                     status: ['authenticated', 'connected']
                 },
                 order: [['updated_at', 'DESC']],
+                include: [{
+                    model: Connection,
+                    as: 'connection',
+                    attributes: ['connection_name']
+                }]
             });
 
             structuredLogger.info('WhatsAppConnectionManager', 'Found existing connections', {
@@ -134,43 +139,68 @@ class WhatsAppConnectionManager {
      * Restaura una conexión específica
      */
     async restoreConnection(whatsappConnectionRecord) {
-        const { clientId, tenantId, connectionId } = whatsappConnectionRecord;
+        const { tenantId, connectionId } = whatsappConnectionRecord;
+        const connection_name = whatsappConnectionRecord.connection?.connection_name;
         
         try {
-            structuredLogger.info('WhatsAppConnectionManager', 'Restoring connection', { 
-                clientId, 
+            structuredLogger.info('WhatsAppConnectionManager', 'Restoring connection', {
                 tenantId,
-                connectionId 
+                connectionId,
+                connection_name
             });
-
-            // Crear estrategia usando clientId como connectionName
-            const strategy = this.createStrategyInstance(clientId, tenantId);
             
-            // Obtener el registro de Connection relacionado
-            const connectionRecord = await Connection.findByPk(connectionId);
-            if (!connectionRecord) {
-                throw new Error(`Connection record not found for connectionId: ${connectionId}`);
+            if (!connection_name) {
+                throw new Error(`Connection name not found for connectionId: ${connectionId}`);
             }
             
-            strategy.connectionRecord = connectionRecord;
+            // Crear estrategia usando clientId como connectionName
+            const strategy = this.createStrategyInstance(connectionId, tenantId);
+                        
+            await strategy.restoreSessionIfExists(connection_name);
             
-            await strategy.restoreSessionIfExists();
+            // Inicializar la estrategia para restaurar la sesión
             await strategy.init();
             
-            // Usar clientId como índice en activeConnections
-            this.activeConnections.set(clientId, {
+            if (!strategy.isClientReady && !strategy.messageListenerSetup) {
+                structuredLogger.info('WhatsAppConnectionManager', 'Configuring restored session manually', {
+                    connectionId,
+                    connection_name,
+                    isClientReady: strategy.isClientReady,
+                    messageListenerSetup: strategy.messageListenerSetup
+                });
+                
+                // Configurar estados manualmente para sesión restaurada
+                strategy.isClientReady = true;
+                strategy.isLoggedIn = true;
+                
+                // Configurar message listeners
+                strategy.setupMessageListeners();
+                strategy.messageListenerSetup = true;
+                
+                structuredLogger.info('WhatsAppConnectionManager', 'Restored session configured successfully', {
+                    connectionId,
+                    connection_name,
+                    isClientReady: strategy.isClientReady,
+                    messageListenerSetup: strategy.messageListenerSetup
+                });
+            }
+            
+            const connectionRecord = await WhatsAppConnection.getConnectionByClientId(connectionId);
+            // Agregar la conexión restaurada al mapa de conexiones activas
+            this.activeConnections.set(connection_name, {
                 strategy,
-                connectionRecord,
+                connectionRecord: connectionRecord,
                 tenantId,
                 lastHealthCheck: new Date(),
                 reconnectionAttempts: 0
             });
 
-            // Reset reconnection attempts on successful restore
-            this.reconnectionAttempts.delete(clientId);
+            if(this.reconnectionAttempts.has(connection_name)){
+                this.reconnectionAttempts.delete(connection_name);
+            }
 
             structuredLogger.info('WhatsAppConnectionManager', 'Connection restored successfully', { 
-                clientId,
+                connectionName,
                 tenantId
             });
             
@@ -178,7 +208,7 @@ class WhatsAppConnectionManager {
 
         } catch (error) {
             structuredLogger.error('WhatsAppConnectionManager', 'Failed to restore connection', error, { 
-                clientId,
+                connectionName,
                 tenantId,
                 connectionId
             });
@@ -220,28 +250,30 @@ class WhatsAppConnectionManager {
      */
     async createNewConnection(connectionId, connectionName = null, tenantId = null) {
         try {
-            const finalClientId = connectionId;
-            const finalConnectionName = connectionName;
-            const finalTenantId = tenantId;
-            
-            if (this.activeConnections.has(finalConnectionName)) {
-                const existingConnection = this.activeConnections.get(finalConnectionName);
+            structuredLogger.info('WhatsAppConnectionManager', 'Creating new connection', {
+                connectionId,
+                connectionName,
+                tenantId
+            });
+
+            if (this.activeConnections.has(connectionName)) {
+                const existingConnection = this.activeConnections.get(connectionName);
 
                 if(existingConnection.connectionRecord?.status === 'disconnected' || existingConnection.connectionRecord?.status === 'inactive'){
                     //Limpiar la conexion existente y crear una nueva
                     await existingConnection.strategy.cleanup?.(); 
-                    this.activeConnections.delete(finalConnectionName);
+                    this.activeConnections.delete(connectionName);
                 }else if (existingConnection.connectionRecord?.status === 'connected' || existingConnection.connectionRecord?.status === 'authenticated') {
-                    throw new Error(`Connection ${finalConnectionName} already exists with status ${existingConnection.connectionRecord?.status}`);
+                    throw new Error(`Connection ${connectionName} already exists with status ${existingConnection.connectionRecord?.status}`);
                 }
 
                 return {
                     success: true,
-                    clientId: finalClientId,
-                    connectionName: finalConnectionName,
+                    clientId: connectionId,
+                    connectionName: connectionName,
                     status: existingConnection.connectionRecord?.status,
-                    tenantId: finalTenantId,
-                    message: `Connection ${finalConnectionName} already exists with status ${existingConnection.connectionRecord?.status}`,
+                    tenantId: tenantId,
+                    message: `Connection ${connectionName} already exists with status ${existingConnection.connectionRecord?.status}`,
                     qr: existingConnection.strategy.getQRCode(),
                     connectionRecord: {
                         id: existingConnection?.connectionRecord?.id,
@@ -254,41 +286,38 @@ class WhatsAppConnectionManager {
             }
 
             structuredLogger.info('WhatsAppConnectionManager', 'Creating new connection', { 
-                clientId: finalClientId,
-                connectionName: finalConnectionName,
-                tenantId: finalTenantId
+                connectionId: connectionId,
+                connectionName: connectionName,
+                tenantId: tenantId
             });
 
-            const strategy = this.createStrategyInstance(finalConnectionName, finalTenantId);
-            strategy.connectionId = finalClientId;
+            const strategy = this.createStrategyInstance(connectionId, tenantId);
+            strategy.connectionId = connectionId;
             
             await strategy.init();
 
-            const whatsAppConnection = await WhatsAppConnection.getConnectionByName(finalConnectionName);
-            if(!whatsAppConnection){
-                throw new Error(`WhatsApp connection not found for ${finalConnectionName}`);
+            if(!strategy.connectionRecord){
+                throw new Error(`WhatsApp connection not found for ${connectionName}`);
             }
-            const connectionRecord = await Connection.findByPk(whatsAppConnection.connectionId);
-
-            this.activeConnections.set(finalConnectionName, {
+            const connectionRecord = strategy.connectionRecord;
+            this.activeConnections.set(connectionName, {
                 strategy,
-                connectionRecord,
-                tenantId: finalTenantId,
+                connectionRecord: connectionRecord,
+                tenantId: tenantId,
                 lastHealthCheck: new Date(),
                 reconnectionAttempts: 0
             });
 
             structuredLogger.info('WhatsAppConnectionManager', 'New connection created', {
-                clientId: finalClientId,
-                connectionId: connectionRecord.id,
-                tenantId: finalTenantId
+                clientId: connectionId,
+                tenantId: tenantId
             });
 
             return {
                 success: true,
-                clientId: finalClientId,
-                connectionName: finalConnectionName,
-                tenantId: finalTenantId,
+                clientId: connectionId,
+                connectionName: connectionName,
+                tenantId: tenantId,
                 message: 'Connection created successfully',
                 qr: strategy.getQR(),
                 connectionRecord: {
@@ -311,41 +340,38 @@ class WhatsAppConnectionManager {
             const connectionRecord = await Connection.findOne({
                 where: {
                     id: clientId,
-                    tenantId: tenantId
+                    tenant_id: tenantId
                 }
             });
             if(!connectionRecord){
                 throw new Error(`Connection ${clientId} not found`);
             }
 
-            const connectionData = this.activeConnections.get(clientId);
+            const connectionData = this.activeConnections.get(connectionRecord.connection_name);
             
-            if (!connectionData) {
-            }else{
-                const { tenantId, connectionRecord } = connectionData;
-            }
-
-
             structuredLogger.info('WhatsAppConnectionManager', 'Restarting connection', { clientId });
+            if (!connectionData) {
 
-            // Clean up existing connection
-            if (connectionData.strategy && connectionData.strategy.cleanup) {
-                await connectionData.strategy.cleanup();
-                this.activeConnections.delete(clientId);
+            }else{
+                // Clean up existing connection
+                if (connectionData.strategy && connectionData.strategy.cleanup) {
+                    await connectionData.strategy.cleanup();
+                    this.activeConnections.delete(connectionRecord.connection_name);
+                }
             }
 
             // Reset reconnection attempts
-            this.reconnectionAttempts.delete(clientId);
+            if(this.reconnectionAttempts.has(connectionRecord.connection_name)){
+                this.reconnectionAttempts.delete(connectionRecord.connection_name);
+            }
 
             //Crear nueva conexión
             const strategy = this.createStrategyInstance(clientId, tenantId);
             await strategy.init();
 
-            const updatedConnectionRecord = await WhatsAppConnection.getConnectionByClientId(clientId);
-
-            this.activeConnections.set(clientId, {
+            this.activeConnections.set(connectionRecord.connection_name, {
                 strategy,
-                connectionRecord: updatedConnectionRecord,
+                connectionRecord: connectionRecord,
                 tenantId,
                 lastHealthCheck: new Date(),
                 reconnectionAttempts: 0
