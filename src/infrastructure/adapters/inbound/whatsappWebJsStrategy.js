@@ -276,7 +276,7 @@ class WhatsAppWebJsStrategy extends WhatsAppConnectionPort {
      */
     async ensureConnectionRecord() {
         try {
-            const { Connection, WhatsAppConnection, ChannelConnection } = require('../../../models');
+            const { Connection, WhatsAppConnection, ChannelConnection } = require('../outbound/persistence/entity');
 
             // Primero intentar buscar en la nueva tabla channel_connections
             const channelConnection = await ChannelConnection.findByPk(this.connectionId);

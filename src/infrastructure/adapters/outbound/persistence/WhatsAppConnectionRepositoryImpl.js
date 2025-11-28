@@ -9,7 +9,7 @@
  * Esta es una clase de ADAPTADOR (capa de infraestructura - outbound/persistence)
  */
 
-const { WhatsAppConnection } = require('../../../../models');
+const { WhatsAppConnection } = require('./entity');
 
 class WhatsAppConnectionRepositoryImpl {
     constructor() {

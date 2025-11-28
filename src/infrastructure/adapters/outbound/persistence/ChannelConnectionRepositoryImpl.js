@@ -1,4 +1,4 @@
-const ChannelConnectionModel = require('../../../../models/ChannelConnection.model');
+const ChannelConnectionModel = require('./entity/ChannelConnection.model');
 const ChannelConnection = require('../../../../domain/model/ChannelConnection');
 
 /**

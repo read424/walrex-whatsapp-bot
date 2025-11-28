@@ -1,5 +1,5 @@
 const { Model, DataTypes } = require('sequelize');
-const sequelize = require('../infrastructure/config/DatabaseConfig');
+const sequelize = require('../../../../config/DatabaseConfig');
 const User = require('./user.model');
 // const TypeDocumentId = require('./typedocument.model');
 

@@ -1,5 +1,5 @@
 const structuredLogger = require('../../config/StructuredLogger');
-const { PriceExchange, Currency } = require('../../../models');
+const { PriceExchange, Currency } = require('./persistence/entity');
 
 /**
  * Adaptador de repositorio para tipos de cambio

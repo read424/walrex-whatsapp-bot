@@ -1,5 +1,5 @@
 const AdvisorRepositoryPort = require('../../../../application/ports/output/AdvisorRepositoryPort');
-const AdvisorModel = require('../../../../models/advisor.model');
+const AdvisorModel = require('./entity/advisor.model');
 
 /**
  * Implementación del repositorio de Advisor usando Sequelize

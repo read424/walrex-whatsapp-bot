@@ -15,7 +15,7 @@ const StructuredLoggerAdapter = require('../outbound/logging/StructuredLoggerAda
 const TradingRepositoryImpl = require('../outbound/persistence/TradingRepositoryImpl');
 
 const WhatsAppInterface = require('../../../../whatsAppInterface');
-const { WhatsAppConnection, Connection } = require('../../../models/index');
+const { WhatsAppConnection, Connection } = require('../outbound/persistence/entity/index');
 
 class WhatsAppWebJsStrategy extends WhatsAppInterface {
 

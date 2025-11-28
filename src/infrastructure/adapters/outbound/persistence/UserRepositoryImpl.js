@@ -1,5 +1,5 @@
 const UserRepositoryPort = require('../../../../application/ports/output/UserRepository');
-const UserModel = require('../../../../models/user.model');
+const UserModel = require('./entity/user.model');
 const UserDomain = require('../../../../domain/model/User');
 
 /**

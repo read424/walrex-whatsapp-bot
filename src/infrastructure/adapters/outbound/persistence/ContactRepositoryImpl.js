@@ -1,6 +1,6 @@
 const ContactRepositoryPort = require('../../../../application/ports/output/ContactRepositoryPort');
 const Contact = require('../../../../domain/model/Contact');
-const ContactModel = require('../../../../models/Contact.model');
+const ContactModel = require('./entity/Contact.model');
 
 /**
  * Implementación del repositorio de contactos usando Sequelize

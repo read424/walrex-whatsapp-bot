@@ -1,6 +1,6 @@
 const { Op } = require('sequelize');
 const moment = require('moment-timezone');
-const { ChatSession } = require('../../../models');
+const { ChatSession } = require('./persistence/entity');
 const { TIME_CONSTANTS } = require('../../../domain/constants/WhatsAppConstants');
 
 class ChatSessionRepository {
