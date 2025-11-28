@@ -68,6 +68,10 @@ class WhatsAppWebJsStrategy extends WhatsAppConnectionPort {
         this.isConnectionClosed = false;
         this.currentQR = null;
 
+        // Promise para esperar el QR
+        this.qrPromise = null;
+        this.qrPromiseResolve = null;
+
         // Configuración de sesión
         this.sessionBasePath = null;
         this.connectionName = null;
@@ -118,7 +122,7 @@ class WhatsAppWebJsStrategy extends WhatsAppConnectionPort {
                 authConfig
             });
 
-            // Crear cliente de WhatsApp
+            // Crear cliente de WhatsApp con configuración mejorada para estabilidad
             this.client = new Client({
                 authStrategy: new LocalAuth({
                     clientId: 'walrex_bot'
@@ -135,21 +139,60 @@ class WhatsAppWebJsStrategy extends WhatsAppConnectionPort {
                         '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                         '--disable-gpu',
                         '--disable-software-rasterizer',
-                        '--disable-extensions'
+                        '--disable-extensions',
+                        '--disable-background-timer-throttling',
+                        '--disable-backgrounding-occluded-windows',
+                        '--disable-renderer-backgrounding',
+                        '--disable-accelerated-2d-canvas',
+                        '--disable-gl-drawing-for-tests',
+                        '--no-first-run',
+                        '--no-zygote',
+                        '--single-process',
+                        '--disable-ipc-flooding-protection'
                     ],
-                    timeout: 90000
+                    timeout: 120000,
+                    handleSIGINT: false,
+                    handleSIGTERM: false,
+                    handleSIGHUP: false
                 }
             });
 
             // Configurar event listeners usando el EventHandler
             this.setupEventListeners();
 
-            // Inicializar cliente
-            await this.client.initialize();
-
-            this.logger.info('WhatsAppWebJsStrategy', 'WhatsApp client initialization started', {
-                connectionId: this.connectionId
+            // Agregar listener para errores no manejados del cliente
+            this.client.on('error', (error) => {
+                this.logger.error('WhatsAppWebJsStrategy', 'WhatsApp client error', error, {
+                    connectionId: this.connectionId
+                });
             });
+
+            // Inicializar cliente con manejo de errores mejorado
+            try {
+                await this.client.initialize();
+
+                this.logger.info('WhatsAppWebJsStrategy', 'WhatsApp client initialization started', {
+                    connectionId: this.connectionId
+                });
+            } catch (initError) {
+                this.logger.error('WhatsAppWebJsStrategy', 'Error during client.initialize()', initError, {
+                    connectionId: this.connectionId,
+                    errorName: initError.name,
+                    errorMessage: initError.message
+                });
+
+                // Intentar limpiar recursos si la inicialización falla
+                try {
+                    if (this.client) {
+                        await this.client.destroy();
+                        this.client = null;
+                    }
+                } catch (cleanupError) {
+                    this.logger.error('WhatsAppWebJsStrategy', 'Error cleaning up after failed initialization', cleanupError);
+                }
+
+                throw initError;
+            }
 
         } catch (error) {
             this.logger.error('WhatsAppWebJsStrategy', 'Error initializing WhatsApp client', error, {
@@ -186,6 +229,7 @@ class WhatsAppWebJsStrategy extends WhatsAppConnectionPort {
             resetQRAttempts: () => this.resetQRAttempts(),
             handleQRTimeout: () => this.handleQRTimeout(),
             clearSession: () => this.clearSession(),
+            notifyQRAvailable: (qr) => this.notifyQRAvailable(qr),
             whatsappConnection: this.connectionWhatsapp,
             connectionRecord: this.connectionRecord,
             isClientReady: () => this.isClientReady,
@@ -440,6 +484,69 @@ class WhatsAppWebJsStrategy extends WhatsAppConnectionPort {
     }
 
     /**
+     * Espera a que el QR esté disponible
+     * @returns {Promise<string|null>} - Promesa que se resuelve con el QR base64
+     */
+    async waitForQR() {
+        // Si ya hay un QR disponible, devolverlo inmediatamente
+        if (this.currentQR) {
+            this.logger.info('WhatsAppWebJsStrategy', 'QR already available', {
+                connectionId: this.connectionId
+            });
+            return this.currentQR;
+        }
+
+        // Si ya está autenticado, no habrá QR
+        if (this.isLoggedIn || this.isClientReady) {
+            this.logger.info('WhatsAppWebJsStrategy', 'Client already authenticated, no QR needed', {
+                connectionId: this.connectionId,
+                isLoggedIn: this.isLoggedIn,
+                isClientReady: this.isClientReady
+            });
+            return null;
+        }
+
+        // Crear una promesa que se resolverá cuando el QR esté disponible
+        // Esta promesa esperará indefinidamente hasta que whatsapp-web.js genere el QR
+        if (!this.qrPromise) {
+            this.qrPromise = new Promise((resolve) => {
+                this.qrPromiseResolve = resolve;
+            });
+        }
+
+        this.logger.info('WhatsAppWebJsStrategy', 'Waiting for QR code from whatsapp-web.js', {
+            connectionId: this.connectionId
+        });
+
+        // Esperar indefinidamente hasta que la librería genere el QR
+        const qr = await this.qrPromise;
+
+        this.logger.info('WhatsAppWebJsStrategy', 'QR received from whatsapp-web.js', {
+            connectionId: this.connectionId,
+            hasQR: !!qr
+        });
+
+        return qr;
+    }
+
+    /**
+     * Notifica que el QR está disponible
+     * @param {string} qr - Código QR en base64
+     */
+    notifyQRAvailable(qr) {
+        this.currentQR = qr;
+
+        if (this.qrPromiseResolve) {
+            this.logger.info('WhatsAppWebJsStrategy', 'Resolving QR promise', {
+                connectionId: this.connectionId
+            });
+            this.qrPromiseResolve(qr);
+            this.qrPromiseResolve = null;
+            this.qrPromise = null;
+        }
+    }
+
+    /**
      * Verifica si el cliente está listo
      * @returns {boolean}
      */
@@ -500,6 +607,67 @@ class WhatsAppWebJsStrategy extends WhatsAppConnectionPort {
     }
 
     /**
+     * Desconecta el cliente de WhatsApp de forma limpia
+     * @returns {Promise<void>}
+     */
+    async disconnect() {
+        try {
+            this.logger.info('WhatsAppWebJsStrategy', 'Disconnecting WhatsApp client', {
+                connectionId: this.connectionId,
+                isLoggedIn: this.isLoggedIn,
+                isClientReady: this.isClientReady
+            });
+
+            // Actualizar estado en la base de datos
+            if (this.connectionRecord) {
+                await this.connectionRepository.updateStatus(this.connectionId, 'disconnected');
+            }
+
+            if (this.connectionWhatsapp) {
+                await this.whatsappConnectionRepository.update(this.connectionId, {
+                    status: 'disconnected',
+                    lastSeen: new Date()
+                });
+            }
+
+            // Limpiar timeouts
+            if (this.qrTimeout) {
+                clearTimeout(this.qrTimeout);
+                this.qrTimeout = null;
+            }
+
+            // Destruir el cliente si existe
+            if (this.client) {
+                try {
+                    await this.client.destroy();
+                } catch (destroyError) {
+                    this.logger.error('WhatsAppWebJsStrategy', 'Error destroying client during disconnect', destroyError, {
+                        connectionId: this.connectionId
+                    });
+                }
+                this.client = null;
+            }
+
+            // Resetear estados
+            this.isLoggedIn = false;
+            this.isClientReady = false;
+            this.isConnectionClosed = true;
+            this.messageListenerSetup = false;
+            this.currentQR = null;
+
+            this.logger.info('WhatsAppWebJsStrategy', 'WhatsApp client disconnected successfully', {
+                connectionId: this.connectionId
+            });
+
+        } catch (error) {
+            this.logger.error('WhatsAppWebJsStrategy', 'Error during disconnect', error, {
+                connectionId: this.connectionId
+            });
+            throw error;
+        }
+    }
+
+    /**
      * Cierra sesión
      * @returns {Promise<void>}
      */
@@ -520,7 +688,13 @@ class WhatsAppWebJsStrategy extends WhatsAppConnectionPort {
         }
 
         if (this.client) {
-            await this.client.destroy();
+            try {
+                await this.client.destroy();
+            } catch (error) {
+                this.logger.error('WhatsAppWebJsStrategy', 'Error destroying client during cleanup', error, {
+                    connectionId: this.connectionId
+                });
+            }
             this.client = null;
         }
 
@@ -571,15 +745,29 @@ class WhatsAppWebJsStrategy extends WhatsAppConnectionPort {
      * @returns {Promise<void>}
      */
     async handleQRTimeout() {
-        this.qrAttempts++;
+        // Obtener el contador actual del EventHandler (que es el source of truth)
+        const eventHandlerAttempts = this.eventHandler.getQRAttempts();
 
-        this.logger.info('WhatsAppWebJsStrategy', 'QR timeout occurred', {
+        this.logger.info('WhatsAppWebJsStrategy', 'QR timeout check', {
             connectionId: this.connectionId,
-            attempts: this.qrAttempts,
-            maxAttempts: this.maxQrAttempts
+            eventHandlerAttempts,
+            strategyAttempts: this.qrAttempts,
+            maxAttempts: this.maxQrAttempts,
+            nextAttempt: eventHandlerAttempts + 1
         });
 
-        if (this.qrAttempts >= this.maxQrAttempts) {
+        // Verificar si el PRÓXIMO intento del EventHandler superaría el máximo
+        // Nota: El EventHandler incrementará después de este método
+        if (eventHandlerAttempts + 1 > this.maxQrAttempts) {
+            this.logger.warn('WhatsAppWebJsStrategy', 'Maximum QR attempts will be exceeded', {
+                connectionId: this.connectionId,
+                currentAttempts: eventHandlerAttempts,
+                maxAttempts: this.maxQrAttempts
+            });
+
+            // Sincronizar el contador local antes de cerrar
+            this.qrAttempts = eventHandlerAttempts + 1;
+
             await this.closeConnectionDueToQRTimeout();
         }
     }
@@ -591,6 +779,12 @@ class WhatsAppWebJsStrategy extends WhatsAppConnectionPort {
     async closeConnectionDueToQRTimeout() {
         try {
             this.isConnectionClosed = true;
+
+            this.logger.warn('WhatsAppWebJsStrategy', 'Closing connection due to QR timeout', {
+                connectionId: this.connectionId,
+                attempts: this.qrAttempts,
+                maxAttempts: this.maxQrAttempts
+            });
 
             // Limpiar QR almacenado en la base de datos (tabla antigua)
             await this.whatsappConnectionRepository.update(this.connectionId, {
@@ -622,14 +816,31 @@ class WhatsAppWebJsStrategy extends WhatsAppConnectionPort {
                 });
             }
 
+            // Destruir el cliente de WhatsApp completamente
             if (this.client) {
-                await this.client.destroy();
-                this.client = null;
+                try {
+                    this.logger.info('WhatsAppWebJsStrategy', 'Destroying WhatsApp client', {
+                        connectionId: this.connectionId
+                    });
+
+                    await this.client.destroy();
+                    this.client = null;
+
+                    this.logger.info('WhatsAppWebJsStrategy', 'WhatsApp client destroyed successfully', {
+                        connectionId: this.connectionId
+                    });
+                } catch (destroyError) {
+                    this.logger.error('WhatsAppWebJsStrategy', 'Error destroying client', destroyError, {
+                        connectionId: this.connectionId
+                    });
+                }
             }
 
             this.isLoggedIn = false;
+            this.isClientReady = false;
             this.currentQR = null;
 
+            // Emitir evento de timeout al frontend
             this.webSocketAdapter.emitToTenant(this.tenantId, 'qrTimeout', {
                 clientId: this.connectionId,
                 tenantId: this.tenantId,
@@ -644,6 +855,42 @@ class WhatsAppWebJsStrategy extends WhatsAppConnectionPort {
                 attempts: this.qrAttempts
             });
 
+            // Notificar al ConnectionManager que debe remover esta conexión
+            // Esto evita que la conexión "zombie" permanezca en memoria
+            try {
+                // Obtener una referencia al ConnectionManager desde el contexto global
+                // El ConnectionManager se registra globalmente al inicializarse
+                const connectionManager = global.whatsAppConnectionManager;
+
+                if (connectionManager && typeof connectionManager.removeConnection === 'function') {
+                    this.logger.info('WhatsAppWebJsStrategy', 'Notifying ConnectionManager to remove connection', {
+                        connectionId: this.connectionId
+                    });
+
+                    // Remover la conexión del manager de forma asíncrona (sin esperar)
+                    setImmediate(async () => {
+                        try {
+                            await connectionManager.removeConnection(this.connectionId);
+                            this.logger.info('WhatsAppWebJsStrategy', 'Connection removed from ConnectionManager', {
+                                connectionId: this.connectionId
+                            });
+                        } catch (removeError) {
+                            this.logger.error('WhatsAppWebJsStrategy', 'Error removing connection from manager', removeError, {
+                                connectionId: this.connectionId
+                            });
+                        }
+                    });
+                } else {
+                    this.logger.warn('WhatsAppWebJsStrategy', 'ConnectionManager not available for cleanup', {
+                        connectionId: this.connectionId
+                    });
+                }
+            } catch (error) {
+                this.logger.error('WhatsAppWebJsStrategy', 'Error notifying ConnectionManager', error, {
+                    connectionId: this.connectionId
+                });
+            }
+
         } catch (error) {
             this.logger.error('WhatsAppWebJsStrategy', 'Error closing connection due to QR timeout', error, {
                 connectionId: this.connectionId
@@ -656,11 +903,18 @@ class WhatsAppWebJsStrategy extends WhatsAppConnectionPort {
      */
     resetQRAttempts() {
         this.qrAttempts = 0;
+
+        // También reiniciar el contador del EventHandler para mantener sincronización
+        if (this.eventHandler && this.eventHandler.resetQRAttempts) {
+            this.eventHandler.resetQRAttempts();
+        }
+
         if (this.qrTimeout) {
             clearTimeout(this.qrTimeout);
             this.qrTimeout = null;
         }
-        this.logger.debug('WhatsAppWebJsStrategy', 'QR attempts reset', {
+
+        this.logger.debug('WhatsAppWebJsStrategy', 'QR attempts reset in both Strategy and EventHandler', {
             connectionId: this.connectionId
         });
     }

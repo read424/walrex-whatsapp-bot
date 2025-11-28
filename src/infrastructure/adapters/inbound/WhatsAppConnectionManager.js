@@ -1,11 +1,12 @@
-const WhatsAppWebJsStrategy = require('./whatsappWebJsStrategy');
+const WhatsAppStrategyFactory = require('../../factories/WhatsAppStrategyFactory');
 const { WhatsAppConnection, Connection } = require('../../../models');
 const { WHATSAPP_LIBRARIES } = require('../../../domain/constants/WhatsAppConstants');
 const structuredLogger = require('../../config/StructuredLogger');
 
 class WhatsAppConnectionManager {
-    constructor(webSocketAdapter){
+    constructor(webSocketAdapter, logger){
         this.webSocketAdapter = webSocketAdapter;
+        this.logger = logger || structuredLogger; // Fallback al logger estructurado si no se inyecta
         this.activeConnections = new Map();// Map<clientId, { strategy, connectionRecord, tenantId }>
         this.isInitialized = false;
         this.selectedLibrary = process.env.WHATSAPP_LIBRARY || WHATSAPP_LIBRARIES.WHATSAPP_WEB_JS;
@@ -18,7 +19,7 @@ class WhatsAppConnectionManager {
         this.healthCheckInterval = parseInt(process.env.HEALTH_CHECK_INTERVAL) || 60000; // 1 minute
 
         // Validar la librería seleccionada
-        this.validateSelectedLibrary();        
+        this.validateSelectedLibrary();
     }
 
     /**
@@ -53,8 +54,12 @@ class WhatsAppConnectionManager {
     createStrategyInstance(connectionId, tenantId) {
         switch (this.selectedLibrary) {
             case WHATSAPP_LIBRARIES.WHATSAPP_WEB_JS:
-                return new WhatsAppWebJsStrategy(this.webSocketAdapter, connectionId, tenantId);
-            
+                return WhatsAppStrategyFactory.create({
+                    webSocketAdapter: this.webSocketAdapter,
+                    connectionId,
+                    tenantId
+                });
+
             default:
                 throw new Error(`Strategy for library '${this.selectedLibrary}' not implemented`);
         }
@@ -199,16 +204,16 @@ class WhatsAppConnectionManager {
                 this.reconnectionAttempts.delete(connection_name);
             }
 
-            structuredLogger.info('WhatsAppConnectionManager', 'Connection restored successfully', { 
-                connectionName,
+            structuredLogger.info('WhatsAppConnectionManager', 'Connection restored successfully', {
+                connectionName: connection_name,
                 tenantId
             });
             
             return strategy;
 
         } catch (error) {
-            structuredLogger.error('WhatsAppConnectionManager', 'Failed to restore connection', error, { 
-                connectionName,
+            structuredLogger.error('WhatsAppConnectionManager', 'Failed to restore connection', error, {
+                connectionName: connection_name,
                 tenantId,
                 connectionId
             });
@@ -256,33 +261,94 @@ class WhatsAppConnectionManager {
                 tenantId
             });
 
-            if (this.activeConnections.has(connectionName)) {
-                const existingConnection = this.activeConnections.get(connectionName);
+            // Verificar si ya existe una conexión activa para este connectionId
+            if (this.activeConnections.has(connectionId)) {
+                const existingConnection = this.activeConnections.get(connectionId);
+                const existingStatus = existingConnection.connectionRecord?.status;
 
-                if(existingConnection.connectionRecord?.status === 'disconnected' || existingConnection.connectionRecord?.status === 'inactive'){
-                    //Limpiar la conexion existente y crear una nueva
-                    await existingConnection.strategy.cleanup?.(); 
-                    this.activeConnections.delete(connectionName);
-                }else if (existingConnection.connectionRecord?.status === 'connected' || existingConnection.connectionRecord?.status === 'authenticated') {
-                    throw new Error(`Connection ${connectionName} already exists with status ${existingConnection.connectionRecord?.status}`);
+                structuredLogger.info('WhatsAppConnectionManager', 'Connection already exists in manager', {
+                    connectionId,
+                    existingStatus
+                });
+
+                // Si está desconectado o inactivo, limpiar y crear nueva
+                if(existingStatus === 'disconnected' || existingStatus === 'inactive'){
+                    structuredLogger.info('WhatsAppConnectionManager', 'Cleaning up disconnected/inactive connection', {
+                        connectionId
+                    });
+                    await existingConnection.strategy.cleanup?.();
+                    this.activeConnections.delete(connectionId);
                 }
+                // Si está en proceso de generación de QR o autenticación, devolver QR existente
+                else if (existingStatus === 'qr_generated' || existingStatus === 'connecting' || existingStatus === 'authenticated') {
+                    structuredLogger.info('WhatsAppConnectionManager', 'Returning existing QR for active connection', {
+                        connectionId,
+                        status: existingStatus
+                    });
 
-                return {
-                    success: true,
-                    clientId: connectionId,
-                    connectionName: connectionName,
-                    status: existingConnection.connectionRecord?.status,
-                    tenantId: tenantId,
-                    message: `Connection ${connectionName} already exists with status ${existingConnection.connectionRecord?.status}`,
-                    qr: existingConnection.strategy.getQRCode(),
-                    connectionRecord: {
-                        id: existingConnection?.connectionRecord?.id,
-                        clientId: existingConnection?.connectionRecord?.clientId,
-                        status: existingConnection?.connectionRecord?.status,
-                        createdAt: existingConnection?.connectionRecord?.createdAt,
-                        updatedAt: existingConnection?.connectionRecord?.updatedAt
+                    // Intentar obtener QR desde connection_metadata
+                    let qrCode = existingConnection.strategy.getQRCode();
+
+                    // Si no está en memoria, intentar obtenerlo de la BD
+                    if (!qrCode) {
+                        try {
+                            const { ChannelConnection } = require('../../../models');
+                            const channelConnection = await ChannelConnection.findByPk(connectionId);
+
+                            if (channelConnection?.connection_metadata?.qrCode) {
+                                qrCode = channelConnection.connection_metadata.qrCode;
+                                structuredLogger.info('WhatsAppConnectionManager', 'QR retrieved from database', {
+                                    connectionId
+                                });
+                            }
+                        } catch (error) {
+                            structuredLogger.error('WhatsAppConnectionManager', 'Error retrieving QR from database', error, {
+                                connectionId
+                            });
+                        }
                     }
-                };
+
+                    return {
+                        success: true,
+                        clientId: connectionId,
+                        connectionName: connectionName,
+                        status: existingStatus,
+                        tenantId: tenantId,
+                        message: `Connection already in progress with status ${existingStatus}`,
+                        qr: qrCode,
+                        connectionRecord: {
+                            id: existingConnection?.connectionRecord?.id,
+                            clientId: existingConnection?.connectionRecord?.clientId,
+                            status: existingStatus,
+                            createdAt: existingConnection?.connectionRecord?.createdAt,
+                            updatedAt: existingConnection?.connectionRecord?.updatedAt
+                        }
+                    };
+                }
+                // Si ya está conectado, informar que ya existe
+                else if (existingStatus === 'connected' || existingStatus === 'active') {
+                    structuredLogger.warn('WhatsAppConnectionManager', 'Connection already active', {
+                        connectionId,
+                        status: existingStatus
+                    });
+
+                    return {
+                        success: true,
+                        clientId: connectionId,
+                        connectionName: connectionName,
+                        status: existingStatus,
+                        tenantId: tenantId,
+                        message: `Connection already active with status ${existingStatus}`,
+                        qr: null,
+                        connectionRecord: {
+                            id: existingConnection?.connectionRecord?.id,
+                            clientId: existingConnection?.connectionRecord?.clientId,
+                            status: existingStatus,
+                            createdAt: existingConnection?.connectionRecord?.createdAt,
+                            updatedAt: existingConnection?.connectionRecord?.updatedAt
+                        }
+                    };
+                }
             }
 
             structuredLogger.info('WhatsAppConnectionManager', 'Creating new connection', { 
@@ -293,14 +359,14 @@ class WhatsAppConnectionManager {
 
             const strategy = this.createStrategyInstance(connectionId, tenantId);
             strategy.connectionId = connectionId;
-            
+
             await strategy.init();
 
             if(!strategy.connectionRecord){
                 throw new Error(`WhatsApp connection not found for ${connectionName}`);
             }
             const connectionRecord = strategy.connectionRecord;
-            this.activeConnections.set(connectionName, {
+            this.activeConnections.set(connectionId, {
                 strategy,
                 connectionRecord: connectionRecord,
                 tenantId: tenantId,
@@ -308,9 +374,19 @@ class WhatsAppConnectionManager {
                 reconnectionAttempts: 0
             });
 
-            structuredLogger.info('WhatsAppConnectionManager', 'New connection created', {
+            structuredLogger.info('WhatsAppConnectionManager', 'New connection created, waiting for QR from whatsapp-web.js', {
                 clientId: connectionId,
                 tenantId: tenantId
+            });
+
+            // Esperar a que whatsapp-web.js genere el QR (sin timeout artificial)
+            // La librería decidirá cuándo está listo el QR
+            const qr = await strategy.waitForQR();
+
+            structuredLogger.info('WhatsAppConnectionManager', 'QR received from whatsapp-web.js', {
+                clientId: connectionId,
+                tenantId: tenantId,
+                hasQR: !!qr
             });
 
             return {
@@ -319,7 +395,7 @@ class WhatsAppConnectionManager {
                 connectionName: connectionName,
                 tenantId: tenantId,
                 message: 'Connection created successfully',
-                qr: strategy.getQR(),
+                qr: qr,
                 connectionRecord: {
                     id: connectionRecord.id,
                     clientId: connectionRecord.clientId,
@@ -394,8 +470,11 @@ class WhatsAppConnectionManager {
     async disconnectConnection(clientId) {
         try {
             const connectionData = this.activeConnections.get(clientId);
-            
+
             if (!connectionData) {
+                structuredLogger.warn('WhatsAppConnectionManager', 'Connection not found for disconnection', {
+                    clientId
+                });
                 return {
                     success: false,
                     message: `Connection ${clientId} not found`
@@ -405,8 +484,39 @@ class WhatsAppConnectionManager {
             structuredLogger.info('WhatsAppConnectionManager', 'Disconnecting connection', { clientId });
 
             const { strategy } = connectionData;
-            await strategy.disconnect();
-            
+
+            // Intentar desconectar la estrategia si tiene el método
+            if (strategy && typeof strategy.disconnect === 'function') {
+                try {
+                    await strategy.disconnect();
+                    structuredLogger.info('WhatsAppConnectionManager', 'Strategy disconnected successfully', {
+                        clientId
+                    });
+                } catch (disconnectError) {
+                    structuredLogger.error('WhatsAppConnectionManager', 'Error calling strategy.disconnect', disconnectError, {
+                        clientId
+                    });
+                    // Continuar aunque falle el disconnect
+                }
+            } else if (strategy && typeof strategy.cleanup === 'function') {
+                // Fallback a cleanup si disconnect no existe
+                try {
+                    await strategy.cleanup();
+                    structuredLogger.info('WhatsAppConnectionManager', 'Strategy cleaned up successfully', {
+                        clientId
+                    });
+                } catch (cleanupError) {
+                    structuredLogger.error('WhatsAppConnectionManager', 'Error calling strategy.cleanup', cleanupError, {
+                        clientId
+                    });
+                }
+            } else {
+                structuredLogger.warn('WhatsAppConnectionManager', 'Strategy has no disconnect or cleanup method', {
+                    clientId
+                });
+            }
+
+            // Remover del mapa de conexiones activas
             this.activeConnections.delete(clientId);
 
             structuredLogger.info('WhatsAppConnectionManager', 'Connection disconnected', {
@@ -429,6 +539,66 @@ class WhatsAppConnectionManager {
 
         } catch (error) {
             structuredLogger.error('WhatsAppConnectionManager', 'Error disconnecting connection', error, { clientId });
+            // No lanzar el error para evitar que crash la app
+            return {
+                success: false,
+                message: `Error disconnecting connection: ${error.message}`,
+                error: error.message
+            };
+        }
+    }
+
+    /**
+     * Remueve completamente una conexión del manager
+     * Útil para limpiar conexiones que fallaron por timeout o errores
+     * @param {string} connectionId - ID de la conexión
+     * @returns {Promise<void>}
+     */
+    async removeConnection(connectionId) {
+        try {
+            structuredLogger.info('WhatsAppConnectionManager', 'Removing connection from manager', {
+                connectionId
+            });
+
+            const connectionData = this.activeConnections.get(connectionId);
+
+            if (connectionData) {
+                // Limpiar la estrategia si existe
+                if (connectionData.strategy && typeof connectionData.strategy.cleanup === 'function') {
+                    try {
+                        await connectionData.strategy.cleanup();
+                        structuredLogger.info('WhatsAppConnectionManager', 'Strategy cleaned up', {
+                            connectionId
+                        });
+                    } catch (cleanupError) {
+                        structuredLogger.error('WhatsAppConnectionManager', 'Error during strategy cleanup', cleanupError, {
+                            connectionId
+                        });
+                    }
+                }
+
+                // Remover del mapa de conexiones activas
+                this.activeConnections.delete(connectionId);
+
+                // Limpiar intentos de reconexión si existen
+                if (this.reconnectionAttempts.has(connectionId)) {
+                    this.reconnectionAttempts.delete(connectionId);
+                }
+
+                structuredLogger.info('WhatsAppConnectionManager', 'Connection removed successfully', {
+                    connectionId,
+                    remainingConnections: this.activeConnections.size
+                });
+            } else {
+                structuredLogger.warn('WhatsAppConnectionManager', 'Connection not found in manager', {
+                    connectionId
+                });
+            }
+
+        } catch (error) {
+            structuredLogger.error('WhatsAppConnectionManager', 'Error removing connection', error, {
+                connectionId
+            });
             throw error;
         }
     }
