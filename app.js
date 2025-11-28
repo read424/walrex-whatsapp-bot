@@ -7,12 +7,16 @@ require('dotenv').config({ path: envFile });
 const express = require('express');
 const bodyParser = require('body-parser');
 const cors = require('cors');
-const routes = require('./src/infrastructure/adapters/inbound/routes');
 const structuredLogger = require('./src/infrastructure/config/StructuredLogger');
+const StructuredLoggerAdapter = require('./src/infrastructure/adapters/outbound/logging/StructuredLoggerAdapter');
+const { setupDependencies } = require('./src/infrastructure/config/CompositionRoot');
 const correlationMiddleware = require('./src/infrastructure/adapters/inbound/middlewares/correlationMiddleware');
 const { WebSocketAdapter } = require('./src/infrastructure/adapters/inbound/');
 const { WhatsAppConnectionManager } = require('./src/infrastructure/adapters/inbound');
 const MONITORING_INTERVAL = process.env.MONITORING_INTERVAL || 5 * 60 * 1000;
+
+// === CREAR LOGGER ADAPTER ===
+const logger = new StructuredLoggerAdapter();
 
 //inicializar express
 const app = express();
@@ -35,11 +39,29 @@ app.use(correlationMiddleware);
 
 // Crear servidor HTTP pero no iniciarlo aún
 const server = require('http').createServer(app);
-// Crear el adaptador WebSocket
-const webSocketAdapter = new WebSocketAdapter(server); // URL del servidor WebSocket
+// Crear el adaptador WebSocket con logger inyectado
+const webSocketAdapter = new WebSocketAdapter(server, logger);
 
 // Crear el gestor
-const connectionManager = new WhatsAppConnectionManager(webSocketAdapter);
+const connectionManager = new WhatsAppConnectionManager(webSocketAdapter, logger);
+
+// Registrar el ConnectionManager globalmente para que las Strategies puedan acceder a él
+// Esto permite que las conexiones se auto-limpien cuando fallen por timeout u otros errores
+global.whatsAppConnectionManager = connectionManager;
+structuredLogger.info('APP', 'ConnectionManager registered globally');
+
+// === INYECTAR DEPENDENCIAS (Composition Root) ===
+// IMPORTANTE: Ahora se ejecuta DESPUÉS de crear webSocketAdapter y connectionManager
+// para poder inyectarlos en SendMessageToConversationUseCase
+structuredLogger.info('APP', 'Setting up dependency injection with external adapters');
+const { channelConnectionController } = setupDependencies({ webSocketAdapter, connectionManager });
+structuredLogger.info('APP', 'Dependency injection completed');
+
+// Ahora sí cargar las rutas (ya tienen los controladores inyectados con todas las dependencias)
+const routes = require('./src/infrastructure/adapters/inbound/routes');
+
+// Cargar rutas v2
+const channelConnectionsRoutesV2 = require('./src/infrastructure/adapters/inbound/rest/routes/v2/connections')(channelConnectionController);
 
 app.use(async (req, res, next)=> {
     req.connectionManager = connectionManager;
@@ -49,6 +71,9 @@ app.use(async (req, res, next)=> {
 
 // Cargar las rutas de la API
 app.use('/api', routes);
+
+// Cargar rutas v2
+app.use('/api/v2/connections', channelConnectionsRoutesV2);
 
 //Initialize the client 
 (async ()=> {
