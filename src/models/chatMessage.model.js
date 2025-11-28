@@ -1,8 +1,8 @@
-const { Model, DataTypes } = require('sequelize');  
+const { Model, DataTypes } = require('sequelize');
 const sequelize = require('../infrastructure/config/DatabaseConfig');
 
 class ChatMessage extends Model {
-    static associate(models){
+    static associate(models) {
         // Un mensaje pertenece a una sesión de chat
         ChatMessage.belongsTo(models.ChatSession, {
             foreignKey: 'chat_session_id',
@@ -120,13 +120,13 @@ ChatMessage.init({
         allowNull: false,
         comment: 'Identificador del tenant para multitenancy'
     }
-}, { 
-    sequelize, 
-    modelName: 'ChatMessage', 
+}, {
+    sequelize,
+    modelName: 'ChatMessage',
     tableName: 'chat_messages',
     timestamps: true,
-    createdAt: 'createdAt',
-    updatedAt: 'updatedAt',
+    createdAt: 'created_at',
+    updatedAt: 'updated_at',
     indexes: [
         {
             fields: ['chat_session_id'],
@@ -144,63 +144,63 @@ ChatMessage.init({
 });
 
 // Métodos de instancia útiles
-ChatMessage.prototype.isIncoming = function() {
+ChatMessage.prototype.isIncoming = function () {
     return this.direction === 'incoming';
 };
 
-ChatMessage.prototype.isOutgoing = function() {
+ChatMessage.prototype.isOutgoing = function () {
     return this.direction === 'outgoing';
 };
 
-ChatMessage.prototype.isText = function() {
+ChatMessage.prototype.isText = function () {
     return this.message_type === 'text';
 };
 
-ChatMessage.prototype.isMedia = function() {
+ChatMessage.prototype.isMedia = function () {
     return ['image', 'audio', 'video', 'document'].includes(this.message_type);
 };
 
-ChatMessage.prototype.isRead = function() {
+ChatMessage.prototype.isRead = function () {
     return this.status === 'read';
 };
 
-ChatMessage.prototype.markAsRead = async function() {
+ChatMessage.prototype.markAsRead = async function () {
     this.status = 'read';
     return await this.save();
 };
 
-ChatMessage.prototype.markAsDelivered = async function() {
+ChatMessage.prototype.markAsDelivered = async function () {
     this.status = 'delivered';
     return await this.save();
 };
 
-ChatMessage.prototype.markAsFailed = async function() {
+ChatMessage.prototype.markAsFailed = async function () {
     this.status = 'failed';
     return await this.save();
 };
 
-ChatMessage.prototype.setRespondedBy = async function(advisorId, responderType = 'human') {
+ChatMessage.prototype.setRespondedBy = async function (advisorId, responderType = 'human') {
     this.responded_by = advisorId;
     this.responder_type = responderType;
     return await this.save();
 };
 
 // Métodos estáticos
-ChatMessage.findBySession = async function(sessionId) {
+ChatMessage.findBySession = async function (sessionId) {
     return await this.findAll({
         where: { chat_session_id: sessionId },
         order: [['created_at', 'ASC']]
     });
 };
 
-ChatMessage.findByContact = async function(contactId) {
+ChatMessage.findByContact = async function (contactId) {
     return await this.findAll({
         where: { contact_id: contactId },
         order: [['created_at', 'DESC']]
     });
 };
 
-ChatMessage.findUnreadByTenant = async function(tenantId) {
+ChatMessage.findUnreadByTenant = async function (tenantId) {
     return await this.findAll({
         where: {
             tenant_id: tenantId,
@@ -210,7 +210,7 @@ ChatMessage.findUnreadByTenant = async function(tenantId) {
     });
 };
 
-ChatMessage.createIncoming = async function(messageData) {
+ChatMessage.createIncoming = async function (messageData) {
     return await this.create({
         ...messageData,
         direction: 'incoming',
@@ -218,7 +218,7 @@ ChatMessage.createIncoming = async function(messageData) {
     });
 };
 
-ChatMessage.createOutgoing = async function(messageData) {
+ChatMessage.createOutgoing = async function (messageData) {
     return await this.create({
         ...messageData,
         direction: 'outgoing',

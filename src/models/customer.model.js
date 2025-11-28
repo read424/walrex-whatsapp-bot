@@ -86,6 +86,11 @@ Customer.init({
         type: DataTypes.STRING(5),
         allowNull: false
     },
+    tenantId: {
+        type: DataTypes.INTEGER,
+        field: 'tenant_id',
+        defaultValue: 1
+    },
     DateDisabled:{
         type: DataTypes.DATE,
         field: 'date_disabled'

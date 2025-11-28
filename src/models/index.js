@@ -11,11 +11,13 @@ const PriceExchange = require('./priceExchange.model');
 const Currency = require('./currency.model');
 const Beneficiary = require("./beneficiary.model");
 const Bank = require("./bank.model");
+const BankTrade = require("./bankTrade.model");
 const TypeAccountBank = require('./type_account_bank.model');
 const TradingCurrencies = require('./tradingCurrencies.model');
 const UserType = require('./UserType.model');
 const WhatsAppConnection = require('./WhatsAppConnection');
 const Connection = require('./Connection.model');
+const ChannelConnection = require('./ChannelConnection.model');
 
 // Definir las relaciones entre modelos
 const models = {
@@ -32,11 +34,13 @@ const models = {
     PriceExchange,
     Beneficiary,
     Bank,
+    BankTrade,
     TypeAccountBank,
     TradingCurrencies,
     UserType,
     Connection,
-    WhatsAppConnection
+    WhatsAppConnection,
+    ChannelConnection,
 };
 
 // Establecer las asociaciones

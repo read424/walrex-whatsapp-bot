@@ -28,7 +28,7 @@ WhatsAppConnection.init({
     },
     // sessionData removido - whatsapp-web.js maneja sesiones automáticamente en filesystem
     status: {
-        type: DataTypes.ENUM('disconnected', 'connecting', 'connected', 'authenticated', 'error'),
+        type: DataTypes.ENUM('disconnected', 'connecting', 'qr_generated', 'connected', 'authenticated', 'error'),
         allowNull: false,
         defaultValue: 'disconnected'
     },
