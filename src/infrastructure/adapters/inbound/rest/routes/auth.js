@@ -2,32 +2,32 @@ const express = require('express');
 const router = express.Router();
 
 /**
- * Rutas REST para Trading
+ * Rutas REST para Autenticación
  *
  * Este archivo SOLO define rutas y las mapea al controlador.
  * NO contiene lógica de negocio, validaciones ni manejo de errores.
  *
- * El controlador se inyecta a través de setTradingController()
+ * El controlador se inyecta a través de setAuthController()
  */
 
-let tradingController = null;
+let authController = null;
 
 /**
  * Inyecta el controlador (llamado desde el composition root)
  */
-function setTradingController(controller) {
-    tradingController = controller;
+function setAuthController(controller) {
+    authController = controller;
 }
 
 /**
  * Middleware para verificar que el controlador esté inyectado
  */
 function ensureControllerInjected(req, res, next) {
-    if (!tradingController) {
+    if (!authController) {
         return res.status(500).json({
             success: false,
             error: {
-                message: 'TradingController no ha sido inyectado',
+                message: 'AuthController no ha sido inyectado',
                 code: 'CONTROLLER_NOT_INITIALIZED'
             }
         });
@@ -39,20 +39,12 @@ function ensureControllerInjected(req, res, next) {
 router.use(ensureControllerInjected);
 
 /**
- * GET /api/trading/calculate-exchange
- * Calcular tipo de cambio
+ * POST /api/auth/login
+ * Autenticar usuario empleado
  */
-router.get('/calculate-exchange', (req, res) => {
-    tradingController.calculateExchange(req, res);
-});
-
-/**
- * POST /api/trading/create-exchange
- * Crear intercambio de trading
- */
-router.post('/create-exchange', (req, res) => {
-    tradingController.createExchange(req, res);
+router.post('/login', (req, res) => {
+    authController.login(req, res);
 });
 
 module.exports = router;
-module.exports.setTradingController = setTradingController;
+module.exports.setAuthController = setAuthController;

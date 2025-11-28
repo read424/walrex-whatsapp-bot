@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const ChatServiceFactory = require('../../../../factories/ChatServiceFactory');
+const { ensureAuthenticated, ensureTenantId } = require('../middleware/authMiddleware');
 
 /**
  * Rutas REST para módulo de Inbox (Conversaciones)
@@ -26,8 +27,11 @@ function setChatController(controller) {
  */
 router.get('/conversations', async (req, res) => {
     try {
-        const { tenantId, page = 1, limit = 50 } = req.query;
-        
+        const { page = 1, limit = 50 } = req.query;
+
+        const tenantId = req.headers['x-tenant-id'];
+        console.log('req.headers', req.headers, tenantId);
+
         if (!tenantId) {
             return res.status(400).json({
                 success: false,
@@ -93,6 +97,39 @@ router.get('/conversations/:conversationId/messages', (req, res) => {
         // Fallback al método antiguo si no hay controlador configurado
         legacyGetConversationMessages(req, res);
     }
+});
+
+/**
+ * POST /api/inbox/conversations/:conversationId/messages
+ * Envía un mensaje a una conversación específica
+ *
+ * Requiere:
+ * - Bearer token en header Authorization
+ * - X-Tenant-Id en headers
+ *
+ * Body:
+ * {
+ *   "content": "string",
+ *   "type": "text" | "image" | "file" | "audio" | "video" | "location" | "contact",
+ *   "replyTo": "string (opcional)",
+ *   "metadata": { object opcional }
+ * }
+ */
+router.post('/conversations/:conversationId/messages', ensureAuthenticated, ensureTenantId, (req, res) => {
+    if (!chatController) {
+        return res.status(500).json({
+            success: false,
+            message: 'ChatController not initialized',
+            code: 'CONTROLLER_NOT_INITIALIZED'
+        });
+    }
+
+    // Adaptar el request para que el controlador reciba conversationId desde params
+    // El ChatController espera conversationId en el body, así que lo agregamos
+    req.body.conversationId = req.params.conversationId;
+
+    // Delegar al ChatController
+    chatController.sendMessageToConversation(req, res);
 });
 
 /**
