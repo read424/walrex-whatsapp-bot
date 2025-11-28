@@ -2,7 +2,7 @@ const { Model, DataTypes } = require('sequelize');
 const sequelize = require('../infrastructure/config/DatabaseConfig');
 
 class ChatSession extends Model {
-    static associate(models){
+    static associate(models) {
         // Una sesión pertenece a un contacto
         ChatSession.belongsTo(models.Contact, {
             foreignKey: 'contact_id',
@@ -19,7 +19,8 @@ class ChatSession extends Model {
         // Una sesión puede ser manejada por un asesor
         ChatSession.belongsTo(models.Advisor, {
             foreignKey: 'handled_by',
-            targetKey: 'id'
+            targetKey: 'id',
+            as: 'advisor'
         });
 
         // Una sesión tiene muchos mensajes
@@ -100,13 +101,13 @@ ChatSession.init({
         allowNull: true,
         comment: 'Información adicional de la sesión como origen, prioridad, etc.'
     }
-}, { 
-    sequelize, 
-    modelName: 'ChatSession', 
+}, {
+    sequelize,
+    modelName: 'ChatSession',
     tableName: 'chat_sessions',
     timestamps: true,
-    createdAt: 'createdAt',
-    updatedAt: 'updatedAt',
+    createdAt: 'created_at',
+    updatedAt: 'updated_at',
     indexes: [
         {
             fields: ['contact_id'],
@@ -123,58 +124,18 @@ ChatSession.init({
     ]
 });
 
-// Métodos de instancia útiles
-ChatSession.prototype.isActive = function() {
-    return this.status === 'active';
-};
-
-ChatSession.prototype.isClosed = function() {
-    return this.status === 'closed';
-};
-
-ChatSession.prototype.close = async function() {
-    this.status = 'closed';
-    this.ended_at = new Date();
-    return await this.save();
-};
-
-ChatSession.prototype.assignToAdvisor = async function(advisorId) {
-    this.handled_by = advisorId;
-    return await this.save();
-};
-
-ChatSession.prototype.getDuration = function() {
-    if (!this.ended_at) {
-        return null;
-    }
-    return this.ended_at - this.started_at;
-};
-
-// Métodos estáticos
-ChatSession.findActiveByTenant = async function(tenantId) {
-    return await this.findAll({
-        where: {
-            tenant_id: tenantId,
-            status: 'active'
-        },
-        order: [['started_at', 'DESC']]
-    });
-};
-
-ChatSession.findByContact = async function(contactId) {
-    return await this.findAll({
-        where: { contact_id: contactId },
-        order: [['started_at', 'DESC']]
-    });
-};
-
-ChatSession.createSession = async function(sessionData) {
-    const session = await this.create({
-        ...sessionData,
-        status: 'active',
-        started_at: new Date()
-    });
-    return session;
-};
+/**
+ * NOTA IMPORTANTE:
+ * Este modelo ORM es SOLO para definición de schema y relaciones de base de datos.
+ * NO debe contener lógica de negocio.
+ *
+ * Toda la lógica de negocio está en:
+ * - Entidad de dominio: src/domain/model/ChatSession.js
+ * - Los repositorios deben mapear entre este modelo ORM y la entidad de dominio
+ *
+ * Lógica de negocio previamente eliminada:
+ * - isActive(), isClosed(), close(), assignToAdvisor(), getDuration() -> ahora en entidad de dominio
+ * - findActiveByTenant(), findByContact(), createSession() -> ahora en repositorio
+ */
 
 module.exports = ChatSession;

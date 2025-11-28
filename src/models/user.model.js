@@ -4,7 +4,7 @@ const Customer = require('./customer.model');
 const UserType = require('./UserType.model');
 
 class User extends Model {
-    static associate(models){
+    static associate(models) {
         User.belongsTo(models.Customer, {
             foreignKey: 'id_client',
             as: 'customer'
@@ -70,8 +70,8 @@ User.init({
     modelName: 'User',
     tableName: 'users',
     timestamps: true,
-    createdAt: 'create_at',
-    updatedAt: 'update_at'
+    createdAt: 'created_at',
+    updatedAt: 'updated_at'
 });
 
 

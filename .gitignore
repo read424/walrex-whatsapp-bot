@@ -71,6 +71,8 @@ notas.txt
 src/session/
 src/sessions/
 
+github-pages-setup/
+
 # Image files - Ignore all except last-design.svg
 src/img/*
 !src/img/last-design.svg

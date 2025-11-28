@@ -14,6 +14,13 @@ class Advisor extends Model {
             foreignKey: 'responded_by',
             sourceKey: 'id'
         });
+
+        // Un asesor pertenece a un usuario (para autenticación)
+        Advisor.belongsTo(models.User, {
+            foreignKey: 'user_id',
+            targetKey: 'id',
+            as: 'user'
+        });
     }
 }
 
@@ -23,6 +30,15 @@ Advisor.init({
         primaryKey: true,
         autoIncrement: true,
         allowNull: false
+    },
+    user_id: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
+        references: {
+            model: 'users',
+            key: 'id'
+        },
+        comment: 'ID del usuario asociado al asesor para autenticación'
     },
     name: {
         type: DataTypes.STRING(100),
@@ -57,13 +73,13 @@ Advisor.init({
         allowNull: true,
         comment: 'Configuraciones personales del asesor'
     }
-}, { 
+}, {
     sequelize,
     modelName: 'Advisor',
     tableName: 'advisors',
     timestamps: true,
-    createdAt: 'created_at',
-    updatedAt: 'updated_at'
+    createdAt: 'createdAt',  // La tabla usa camelCase, no snake_case
+    updatedAt: 'updatedAt'   // La tabla usa camelCase, no snake_case
 });
 
 // Métodos de instancia útiles
@@ -124,7 +140,7 @@ Advisor.findByRole = async function(role, tenantId = null) {
     if (tenantId) {
         where.tenant_id = tenantId;
     }
-    
+
     return await this.findAll({
         where,
         order: [['name', 'ASC']]
@@ -136,8 +152,14 @@ Advisor.findByEmail = async function(email, tenantId = null) {
     if (tenantId) {
         where.tenant_id = tenantId;
     }
-    
+
     return await this.findOne({ where });
+};
+
+Advisor.findByUserId = async function(userId) {
+    return await this.findOne({
+        where: { user_id: userId, is_active: true }
+    });
 };
 
 Advisor.createAdvisor = async function(advisorData) {

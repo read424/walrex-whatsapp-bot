@@ -161,7 +161,8 @@ class WhatsAppEventHandler {
 
             // Actualizar en base de datos (tabla antigua whatsapp_connections)
             await this.whatsappConnectionRepository.update(connectionId, {
-                qrCode: base64QR
+                qrCode: base64QR,
+                status: 'qr_generated'
             });
 
             // También actualizar en channel_connections (nueva tabla v2)
@@ -169,6 +170,7 @@ class WhatsAppEventHandler {
                 const ChannelConnectionRepositoryImpl = require('../../outbound/persistence/ChannelConnectionRepositoryImpl');
                 const channelConnectionRepo = new ChannelConnectionRepositoryImpl({ logger: this.logger });
 
+                // Actualizar connection_metadata con los datos del QR
                 await channelConnectionRepo.updateMetadata(connectionId, {
                     qrCode: base64QR,
                     qrCodeText: qr,
@@ -176,14 +178,27 @@ class WhatsAppEventHandler {
                     qrAttempts: this.qrAttempts
                 });
 
-                this.logger.debug('WhatsAppEventHandler', 'QR updated in channel_connections', {
-                    connectionId
+                // Actualizar status a 'qr_generated' en la tabla principal
+                await this.connectionRepository.updateStatus(connectionId, 'qr_generated');
+
+                this.logger.info('WhatsAppEventHandler', 'QR generated and saved - Status updated to qr_generated', {
+                    connectionId,
+                    attempts: this.qrAttempts
                 });
             } catch (error) {
                 // Si falla (porque aún no existe la conexión en channel_connections), solo loguear
                 this.logger.debug('WhatsAppEventHandler', 'Could not update QR in channel_connections', {
                     connectionId,
                     error: error.message
+                });
+            }
+
+            // Notificar a la Strategy que el QR está disponible
+            // Esto resuelve la promesa waitForQR() si alguien está esperando
+            if (context.notifyQRAvailable) {
+                context.notifyQRAvailable(base64QR);
+                this.logger.debug('WhatsAppEventHandler', 'Strategy notified of QR availability', {
+                    connectionId
                 });
             }
 
@@ -281,21 +296,29 @@ class WhatsAppEventHandler {
                 resetQRAttempts();
             }
 
-            // Actualizar ambos registros de estado
-            await this.connectionRepository.updateStatus(connectionId, 'authenticated');
+            // Actualizar estado a 'connecting' (proceso de autenticación iniciado)
+            await this.connectionRepository.updateStatus(connectionId, 'connecting');
             await this.whatsappConnectionRepository.update(connectionId, {
-                status: 'authenticated'
+                status: 'connecting'
             });
 
-            this.logger.info('WhatsAppEventHandler', 'Session authenticated successfully', {
+            this.logger.info('WhatsAppEventHandler', 'Session authenticated - Status changed to connecting', {
                 connectionId
             });
 
-            // Emitir evento al frontend
+            // Emitir evento 'authenticated' al frontend via WebSocket
             this.webSocketAdapter.emitToTenant(tenantId, 'authenticated', {
                 connectionId,
+                clientId: connectionId,
                 tenantId,
+                status: 'connecting',
+                message: 'Autenticación exitosa, conectando...',
                 timestamp: new Date().toISOString()
+            });
+
+            this.logger.info('WhatsAppEventHandler', 'Authenticated event emitted to tenant via WebSocket', {
+                connectionId,
+                tenantId
             });
 
         } catch (error) {
@@ -312,7 +335,7 @@ class WhatsAppEventHandler {
      * @param {Object} context - Contexto de la conexión
      */
     async handleAuthFailureEvent(msg, context) {
-        const { connectionId, clearSession } = context;
+        const { connectionId, tenantId, clearSession } = context;
 
         try {
             this.logger.error('WhatsAppEventHandler', 'Authentication failed', null, {
@@ -320,10 +343,26 @@ class WhatsAppEventHandler {
                 message: msg
             });
 
-            // Actualizar estado en base de datos
+            // Actualizar estado a 'inactive' (autenticación fallida)
+            await this.connectionRepository.updateStatus(connectionId, 'inactive');
             await this.whatsappConnectionRepository.update(connectionId, {
-                status: 'error',
+                status: 'inactive',
                 lastError: msg
+            });
+
+            this.logger.warn('WhatsAppEventHandler', 'Auth failure - Status changed to inactive', {
+                connectionId,
+                error: msg
+            });
+
+            // Emitir evento de fallo de autenticación al frontend
+            this.webSocketAdapter.emitToTenant(tenantId, 'auth_failure', {
+                connectionId,
+                clientId: connectionId,
+                tenantId,
+                status: 'inactive',
+                message: msg || 'Falló la autenticación',
+                timestamp: new Date().toISOString()
             });
 
             // Limpiar sesión

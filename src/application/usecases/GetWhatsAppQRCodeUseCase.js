@@ -38,7 +38,7 @@ class GetWhatsAppQRCodeUseCase {
      *
      * @returns {Promise<Object>} - QR code con información adicional
      */
-    async execute({
+    async GetWhatsAppQRCode({
         connectionId,
         tenantId,
         forceRegenerate = false
@@ -97,31 +97,10 @@ class GetWhatsAppQRCodeUseCase {
 
             // 6. Obtener o generar QR code
             let qrCode = null;
-            let qrCodeText = null;
-            let expiresAt = null;
 
             // Verificar si la conexión fue cerrada por timeout
             const wasClosedByTimeout = connection.status === 'disconnected' &&
                                        connection.connectionMetadata?.lastError === 'QR timeout occurred';
-
-            // Intentar obtener QR desde metadata si existe y es reciente
-            // PERO solo si no fue cerrada por timeout (en ese caso forzar regeneración)
-            if (connection.connectionMetadata?.qrCode && !forceRegenerate && !wasClosedByTimeout) {
-                const qrGeneratedAt = connection.connectionMetadata?.qrGeneratedAt;
-                const qrAge = qrGeneratedAt ? Date.now() - new Date(qrGeneratedAt).getTime() : 999999;
-
-                // Si el QR tiene menos de 60 segundos, usarlo
-                if (qrAge < 60000) {
-                    qrCode = connection.connectionMetadata.qrCode;
-                    qrCodeText = connection.connectionMetadata.qrCodeText;
-                    expiresAt = new Date(new Date(qrGeneratedAt).getTime() + 60000);
-
-                    this.logger.info('GetWhatsAppQRCodeUseCase', 'Using existing QR code from metadata', {
-                        connectionId,
-                        qrAge
-                    });
-                }
-            }
 
             // Si fue cerrada por timeout, forzar regeneración
             if (wasClosedByTimeout) {
@@ -152,8 +131,6 @@ class GetWhatsAppQRCodeUseCase {
 
                     if (updatedConnection.connectionMetadata?.qrCode) {
                         qrCode = updatedConnection.connectionMetadata.qrCode;
-                        qrCodeText = updatedConnection.connectionMetadata.qrCodeText;
-                        expiresAt = new Date(Date.now() + 60000); // 60 segundos
                     }
                 } catch (error) {
                     this.logger.error('GetWhatsAppQRCodeUseCase', 'Error initializing WhatsApp connection', error, {
@@ -193,16 +170,7 @@ class GetWhatsAppQRCodeUseCase {
                     connectionId: connection.id,
                     connectionName: connection.connectionName,
                     status: connection.status,
-                    qrCode: qrCode,
-                    qrCodeText: qrCodeText || undefined,
-                    expiresAt: expiresAt,
-                    instructions: [
-                        '1. Abre WhatsApp en tu teléfono',
-                        '2. Ve a Ajustes > Dispositivos vinculados',
-                        '3. Toca \'Vincular un dispositivo\'',
-                        '4. Escanea este código QR',
-                        '5. El código expira en 60 segundos'
-                    ]
+                    qrCode: qrCode
                 }
             };
 

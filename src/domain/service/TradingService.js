@@ -1,13 +1,16 @@
-const structuredLogger = require('../../infrastructure/config/StructuredLogger');
-
 /**
  * Servicio de dominio para operaciones de trading
  * Sigue la arquitectura hexagonal - Capa de dominio
  * Contiene la lógica de negocio para cálculos de tipos de cambio
  */
 class TradingService {
-    constructor(tradingPort) {
+    /**
+     * @param {Object} tradingPort - Puerto para operaciones de trading
+     * @param {Object} logger - Puerto para logging (LoggerPort)
+     */
+    constructor(tradingPort, logger) {
         this.tradingPort = tradingPort;
+        this.logger = logger;
     }
 
     /**
@@ -18,7 +21,7 @@ class TradingService {
      */
     async getExchangeRate(currencyBase, currencyQuote) {
         try {
-            structuredLogger.info('TradingService', 'Getting exchange rate', {
+            this.logger.info('TradingService', 'Getting exchange rate', {
                 currencyBase,
                 currencyQuote
             });
@@ -31,7 +34,7 @@ class TradingService {
                 throw new Error('Tipo de cambio inválido recibido del proveedor');
             }
 
-            structuredLogger.info('TradingService', 'Exchange rate obtained successfully', {
+            this.logger.info('TradingService', 'Exchange rate obtained successfully', {
                 currencyBase,
                 currencyQuote,
                 exchangeRate
@@ -40,7 +43,7 @@ class TradingService {
             return exchangeRate;
 
         } catch (error) {
-            structuredLogger.error('TradingService', 'Error getting exchange rate', error, {
+            this.logger.error('TradingService', 'Error getting exchange rate', error, {
                 currencyBase,
                 currencyQuote
             });
@@ -58,7 +61,7 @@ class TradingService {
      */
     async calculateExchange(currencyBase, currencyQuote, amount, dateExchange = new Date()) {
         try {
-            structuredLogger.info('TradingService', 'Calculating exchange', {
+            this.logger.info('TradingService', 'Calculating exchange', {
                 currencyBase,
                 currencyQuote,
                 amount,
@@ -81,7 +84,7 @@ class TradingService {
                 timestamp: new Date().toISOString()
             };
 
-            structuredLogger.info('TradingService', 'Exchange calculation completed', {
+            this.logger.info('TradingService', 'Exchange calculation completed', {
                 currencyBase,
                 currencyQuote,
                 amount,
@@ -93,7 +96,7 @@ class TradingService {
             return result;
 
         } catch (error) {
-            structuredLogger.error('TradingService', 'Error calculating exchange', error, {
+            this.logger.error('TradingService', 'Error calculating exchange', error, {
                 currencyBase,
                 currencyQuote,
                 amount,
@@ -113,7 +116,7 @@ class TradingService {
      */
     async getExchangeRateHistory(currencyBase, currencyQuote, startDate, endDate) {
         try {
-            structuredLogger.info('TradingService', 'Getting exchange rate history', {
+            this.logger.info('TradingService', 'Getting exchange rate history', {
                 currencyBase,
                 currencyQuote,
                 startDate: startDate.toISOString(),
@@ -133,7 +136,7 @@ class TradingService {
                 endDate
             );
 
-            structuredLogger.info('TradingService', 'Exchange rate history obtained', {
+            this.logger.info('TradingService', 'Exchange rate history obtained', {
                 currencyBase,
                 currencyQuote,
                 recordCount: history.length
@@ -142,7 +145,7 @@ class TradingService {
             return history;
 
         } catch (error) {
-            structuredLogger.error('TradingService', 'Error getting exchange rate history', error, {
+            this.logger.error('TradingService', 'Error getting exchange rate history', error, {
                 currencyBase,
                 currencyQuote,
                 startDate: startDate?.toISOString(),
@@ -158,18 +161,18 @@ class TradingService {
      */
     async getAvailableCurrencies() {
         try {
-            structuredLogger.info('TradingService', 'Getting available currencies');
+            this.logger.info('TradingService', 'Getting available currencies');
 
             const currencies = await this.tradingPort.getAvailableCurrencies();
 
-            structuredLogger.info('TradingService', 'Available currencies obtained', {
+            this.logger.info('TradingService', 'Available currencies obtained', {
                 currencyCount: currencies.length
             });
 
             return currencies;
 
         } catch (error) {
-            structuredLogger.error('TradingService', 'Error getting available currencies', error);
+            this.logger.error('TradingService', 'Error getting available currencies', error);
             throw error;
         }
     }
@@ -197,7 +200,7 @@ class TradingService {
      */
     async getTradingPrice(params) {
         try {
-            structuredLogger.info('TradingService', 'Getting trading price from Binance', {
+            this.logger.info('TradingService', 'Getting trading price from Binance', {
                 typeTrade: params.typeTrade,
                 currencyBase: params.currencyBase,
                 currencyQuote: params.currencyQuote,
@@ -208,7 +211,7 @@ class TradingService {
             // Obtener el precio de trading del puerto (que maneja Binance)
             const tradingPrice = await this.tradingPort.getTradingPrice(params);
 
-            structuredLogger.info('TradingService', 'Trading price obtained successfully', {
+            this.logger.info('TradingService', 'Trading price obtained successfully', {
                 typeTrade: params.typeTrade,
                 currencyBase: params.currencyBase,
                 currencyQuote: params.currencyQuote,
@@ -218,7 +221,7 @@ class TradingService {
             return tradingPrice;
 
         } catch (error) {
-            structuredLogger.error('TradingService', 'Error getting trading price', error, {
+            this.logger.error('TradingService', 'Error getting trading price', error, {
                 typeTrade: params?.typeTrade,
                 currencyBase: params?.currencyBase,
                 currencyQuote: params?.currencyQuote,

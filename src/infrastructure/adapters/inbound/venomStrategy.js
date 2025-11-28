@@ -1,18 +1,21 @@
 const WhatsAppInterface  = require('../../../../whatsAppInterface');
 const { WhatsAppBotRefactored } = require('../../../application/WhatsAppBotRefactored');
 const venom = require('venom-bot');
-const structuredLogger = require('../../config/StructuredLogger');
 const { SESSION_STATUS, PHONE_PATTERNS } = require('../../../domain/constants/WhatsAppConstants');
-// Logger ya no necesario, usando structuredLogger directamente
 const fs = require('fs');
 const path = require('path');
 const sessionFilePath = path.join(__dirname, './../session.json');
 
+/**
+ * Estrategia de conexión WhatsApp usando Venom Bot
+ * Implementa inversión de dependencias recibiendo el logger mediante DI
+ */
 class VenomStrategy extends WhatsAppInterface {
 
-    constructor(webSocket) {
+    constructor(webSocket, logger) {
         super();
         this.webSocketAdapter = webSocket;
+        this.logger = logger;
         this.client = null;
         this.sessionData = null;
         this.whatsAppBot = null; // Se inicializará después
@@ -35,24 +38,30 @@ class VenomStrategy extends WhatsAppInterface {
 
     async init(){
         if(!this.sessionData.isLoggedIn){
+            this.logger.info('VenomStrategy', 'Iniciando sesión nueva de Venom Bot');
             this.client = await venom.create(
                 'sessionName',
                 (qrcode)=>{
-                    console.log('Escanea el siguiente codigo QR para conectarse con Venom Bot:');
-                    console.log(qrcode);
+                    this.logger.info('VenomStrategy', 'QR Code generado para escanear con WhatsApp', {
+                        qrLength: qrcode.length
+                    });
                 },
                 async (statusSession)=>{
-                    console.log('Estado de la sesión:', statusSession);
+                    this.logger.info('VenomStrategy', 'Estado de la sesión cambiado', {
+                        status: statusSession
+                    });
                     if(statusSession === SESSION_STATUS.IS_LOGGED){
                         this.sessionData.isLoggedIn = true;
                         await this.saveSession();
+                        this.logger.info('VenomStrategy', 'Sesión iniciada correctamente');
                     } else if (statusSession === SESSION_STATUS.NOT_LOGGED) {
-                        console.log('No se inició sesión correctamente.');
+                        this.logger.warn('VenomStrategy', 'No se inició sesión correctamente');
                     }
                 },
                 { headless: 'new', devtools: false }
             );
         }else{
+            this.logger.info('VenomStrategy', 'Restaurando sesión existente de Venom Bot');
             this.client = await venom.create(
                 'sessionName',
                 undefined,
@@ -67,6 +76,7 @@ class VenomStrategy extends WhatsAppInterface {
         }
         this.whatsAppBot.setWhatsAppClient(this);
         this.listenMessages();
+        this.logger.info('VenomStrategy', 'VenomStrategy inicializado exitosamente');
     }
 
     async saveSession() {
@@ -86,8 +96,14 @@ class VenomStrategy extends WhatsAppInterface {
     async sendMessageTextViaTyping(number, message){
         try{
             await this.client.sendTextViaTyping(number, message);
+            this.logger.debug('VenomStrategy', 'Mensaje enviado vía typing', {
+                number: number.substring(0, 10) + '...',
+                messageLength: message.length
+            });
         }catch(error){
-            console.error('Error sending message: ', error);
+            this.logger.error('VenomStrategy', 'Error sending message via typing', error, {
+                number: number.substring(0, 10) + '...'
+            });
         }
     }
 
@@ -106,10 +122,15 @@ class VenomStrategy extends WhatsAppInterface {
         ];
         await this.client.sendButtons(number, message, footer, buttonsT)
             .then((result)=>{
-                console.log('Result: ', result);
+                this.logger.info('VenomStrategy', 'Botones enviados exitosamente', {
+                    number: number.substring(0, 10) + '...',
+                    buttonCount: buttonsT.length
+                });
             })
             .catch((erro)=>{
-                console.error('Error When sending: ', erro);
+                this.logger.error('VenomStrategy', 'Error al enviar botones', erro, {
+                    number: number.substring(0, 10) + '...'
+                });
             });
     }
 
@@ -117,16 +138,21 @@ class VenomStrategy extends WhatsAppInterface {
         await this.client.onMessage(async (message) => {
             if(message.from === PHONE_PATTERNS.STATUS_BROADCAST || message.from.endsWith(PHONE_PATTERNS.GROUP_CHAT_SUFFIX)){
                 return true;
-            }    
-            console.log(`message.from: ${message.from}`);
-            console.log('Message received: ', message.body);
+            }
+            this.logger.debug('VenomStrategy', 'Mensaje recibido', {
+                from: message.from.substring(0, 15) + '...',
+                bodyLength: message.body?.length || 0
+            });
             await this.handleIncomingMessage(message);
         });
     }
 
     async handleIncomingMessage(message) {
         // Lógica para manejar los mensajes
-        console.log(`Received message: ${message.body} from ${message.from}`);
+        this.logger.info('VenomStrategy', 'Procesando mensaje entrante', {
+            from: message.from.substring(0, 15) + '...',
+            body: message.body?.substring(0, 50) || ''
+        });
         await this.whatsAppBot.handleMessage(message);
     }    
 

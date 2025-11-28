@@ -1,12 +1,16 @@
-const bcrypt = require('bcrypt');
-const AuthenticationUseCase = require('../../application/ports/input/AuthenticationUseCase');
-const { IllegalArgumentException, AuthenticationException } = require('../../domain/exceptions/index');
+const { IllegalArgumentException, AuthenticationException } = require('../exceptions/index');
 
-class AuthenticationService extends AuthenticationUseCase {
-  constructor(userRepository, tokenGenerator) {
-    super();
+/**
+ * Servicio de dominio puro para autenticación
+ * NO debe depender de la capa de aplicación
+ * Solo contiene lógica de negocio de autenticación
+ */
+class AuthenticationService {
+  constructor(userRepository, tokenGenerator, passwordHasher, logger) {
     this.userRepository = userRepository;
     this.tokenGenerator = tokenGenerator;
+    this.passwordHasher = passwordHasher;
+    this.logger = logger;
   }
 
   async authenticate(credentials) {
@@ -18,6 +22,7 @@ class AuthenticationService extends AuthenticationUseCase {
     try {
       // Buscar usuario
       const user = await this.userRepository.findByUsername(email);
+      this.logger.info('AuthenticationService', 'User found', { user: user });
       
       if (!user) {
         throw new AuthenticationException('Credenciales inválidas');
@@ -33,8 +38,8 @@ class AuthenticationService extends AuthenticationUseCase {
         throw new AuthenticationException('Usuario inactivo');
       }
 
-      // Verificar contraseña
-      const isValidPassword = user.hasValidCredentials(password, bcrypt);
+      // Verificar contraseña usando el puerto inyectado
+      const isValidPassword = await this.passwordHasher.compare(password, user.contrasenia);
       if (!isValidPassword) {
         throw new AuthenticationException('Credenciales inválidas');
       }
@@ -60,7 +65,9 @@ class AuthenticationService extends AuthenticationUseCase {
       }
       
       // Log del error del sistema pero retornar error genérico
-      console.error('System error during authentication:', error);
+      if (this.logger) {
+        this.logger.error('AuthenticationService', 'System error during authentication', { error: error.message, stack: error.stack });
+      }
       throw new AuthenticationException('Error interno del sistema');
     }
   }
@@ -71,7 +78,9 @@ class AuthenticationService extends AuthenticationUseCase {
       await this.userRepository.updateLastLogin(userId, now);
     } catch (error) {
       // No es crítico si falla, solo loggear
-      console.warn('Failed to update last login for user:', userId, error.message);
+      if (this.logger) {
+        this.logger.warn('AuthenticationService', 'Failed to update last login', { userId, error: error.message });
+      }
     }
   }
 

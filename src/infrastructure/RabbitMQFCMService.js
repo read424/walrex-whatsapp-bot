@@ -1,11 +1,16 @@
 const amqp = require("amqplib")
 const admin = require("./../config/firebaseConfig");
 
+/**
+ * Servicio de infraestructura para integración RabbitMQ + FCM
+ * Implementa inversión de dependencias recibiendo el logger mediante DI
+ */
 class RabbitMQFCMService {
 
-    constructor(rabbiMQUrl, queueName){
+    constructor(rabbiMQUrl, queueName, logger){
         this.rabbiMQUrl= rabbiMQUrl;
         this.queueName = queueName;
+        this.logger = logger;
     }
 
     // Inicializa la conexión a RabbitMQ
@@ -14,9 +19,14 @@ class RabbitMQFCMService {
             this.connection = await amqp.connect(this.rabbitMQUrl);
             this.channel = await this.connection.createChannel();
             await this.channel.assertQueue(this.queueName, { durable: true });
-            console.log(`Conectado a RabbitMQ, escuchando en la cola: ${this.queueName}`);
+            this.logger.info('RabbitMQFCMService', 'Conectado a RabbitMQ exitosamente', {
+                queueName: this.queueName
+            });
         } catch (error) {
-            console.error('Error al conectar con RabbitMQ:', error);
+            this.logger.error('RabbitMQFCMService', 'Error al conectar con RabbitMQ', error, {
+                rabbitMQUrl: this.rabbiMQUrl,
+                queueName: this.queueName
+            });
             throw error;
         }
     }
@@ -32,9 +42,15 @@ class RabbitMQFCMService {
                 },
                 data: payload.data || {}, // Datos adicionales si es necesario
             });
-            console.log('Notificación enviada a FCM');
+            this.logger.info('RabbitMQFCMService', 'Notificación enviada a FCM exitosamente', {
+                token: token.substring(0, 20) + '...',
+                title: payload.title
+            });
         } catch (error) {
-            console.error('Error al enviar notificación a FCM:', error);
+            this.logger.error('RabbitMQFCMService', 'Error al enviar notificación a FCM', error, {
+                token: token.substring(0, 20) + '...',
+                payload: { title: payload.title, body: payload.body?.substring(0, 50) }
+            });
         }
     }
   
@@ -49,8 +65,12 @@ class RabbitMQFCMService {
                     // Aquí esperamos que messageData contenga el token FCM y el payload
                     const { fcmToken, payload } = messageData;
 
-                    console.log(`Mensaje recibido desde RabbitMQ: ${messageContent}`);
-                    
+                    this.logger.info('RabbitMQFCMService', 'Mensaje recibido desde RabbitMQ', {
+                        messageLength: messageContent.length,
+                        hasToken: !!fcmToken,
+                        payloadTitle: payload?.title
+                    });
+
                     // Enviar notificación a FCM
                     await this.sendNotificationToFCM(fcmToken, payload);
 
@@ -58,11 +78,17 @@ class RabbitMQFCMService {
                     this.channel.ack(msg);
                 }
             }, { noAck: false });
+
+            this.logger.info('RabbitMQFCMService', 'Consumidor de mensajes iniciado', {
+                queueName: this.queueName
+            });
         } catch (error) {
-            console.error('Error al consumir mensajes de RabbitMQ:', error);
+            this.logger.error('RabbitMQFCMService', 'Error al consumir mensajes de RabbitMQ', error, {
+                queueName: this.queueName
+            });
         }
     }
-  
+
     // Cerrar la conexión a RabbitMQ
     async closeConnection() {
         if (this.channel) {
@@ -71,7 +97,7 @@ class RabbitMQFCMService {
         if (this.connection) {
             await this.connection.close();
         }
-        console.log('Conexión a RabbitMQ cerrada');
+        this.logger.info('RabbitMQFCMService', 'Conexión a RabbitMQ cerrada');
     }  
 
 }

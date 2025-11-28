@@ -17,6 +17,10 @@ class UserRepository {
     async updateLastLogin(userId, loginDate) {
       throw new Error('Method must be implemented');
     }
+
+    async findById(id){
+        throw new Error('Method must be implemented');
+    }
 }
 
 module.exports = UserRepository;

@@ -1,5 +1,3 @@
-const structuredLogger = require('../../infrastructure/config/StructuredLogger');
-// Logger ya no necesario, usando structuredLogger directamente
 const { cleanSetterLastName } = require("../../utils/index");
 
 class UserSession {

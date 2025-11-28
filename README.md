@@ -233,16 +233,32 @@ bot-walrexapp/
 │   │   ├── services/             # Servicios de aplicación
 │   │   ├── usecases/             # Casos de uso específicos
 │   │   └── ports/                # Puertos (interfaces)
-│   └── infrastructure/           # 🌐 Adaptadores
-│       ├── adapters/             # Implementaciones
-│       │   ├── inbound/          # Controladores
-│       │   └── outbound/         # Repositorios
-│       └── config/               # Configuraciones
+│   ├── infrastructure/           # 🌐 Adaptadores
+│   │   ├── adapters/             # Implementaciones
+│   │   │   ├── inbound/          # Controladores
+│   │   │   └── outbound/         # Repositorios
+│   │   └── config/               # Configuraciones
+│   └── py-script/                # 🐍 Scripts Python (OCR, etc.)
+├── docs/                         # 📚 Documentación técnica
+│   └── INDEX.md                  # Índice de documentación
 ├── models/                       # Modelos Sequelize
 ├── migrations/                   # Migraciones de BD
 ├── public/                       # Archivos estáticos
 └── logs/                         # Archivos de log
 ```
+
+## 📚 Documentación
+
+Toda la documentación técnica del proyecto está organizada en la carpeta [`docs/`](./docs/).
+
+### Acceso rápido:
+- **📖 [Índice de Documentación](./docs/INDEX.md)** - Índice completo organizado por categorías
+- **🏗️ Arquitectura Hexagonal** - Guías y auditorías de arquitectura
+- **📸 Integración con Instagram** - Configuración de RapidAPI y OCR
+- **🔧 Refactorizaciones** - Historial de cambios y mejoras
+- **🐛 Correcciones** - Documentación de fixes específicos
+
+**Ver todas**: [`docs/INDEX.md`](./docs/INDEX.md)
 
 ## 🔌 APIs y Endpoints
 
