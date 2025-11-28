@@ -1,4 +1,4 @@
-const { Customer } = require('../../../models');
+const { Customer } = require('./persistence/entity');
 
 class CustomerRepository {
     constructor(){

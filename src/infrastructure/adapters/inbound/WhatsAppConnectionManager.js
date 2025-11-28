@@ -1,5 +1,5 @@
 const WhatsAppStrategyFactory = require('../../factories/WhatsAppStrategyFactory');
-const { WhatsAppConnection, Connection } = require('../../../models');
+const { WhatsAppConnection, Connection } = require('../outbound/persistence/entity');
 const { WHATSAPP_LIBRARIES } = require('../../../domain/constants/WhatsAppConstants');
 const structuredLogger = require('../../config/StructuredLogger');
 
@@ -292,7 +292,7 @@ class WhatsAppConnectionManager {
                     // Si no está en memoria, intentar obtenerlo de la BD
                     if (!qrCode) {
                         try {
-                            const { ChannelConnection } = require('../../../models');
+                            const { ChannelConnection } = require('../outbound/persistence/entity');
                             const channelConnection = await ChannelConnection.findByPk(connectionId);
 
                             if (channelConnection?.connection_metadata?.qrCode) {

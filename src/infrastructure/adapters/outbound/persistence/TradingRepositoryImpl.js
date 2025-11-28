@@ -1,5 +1,5 @@
 const TradingRepositoryPort = require('../../../../application/ports/output/TradingRepositoryPort');
-const { TradingCurrencies, Currency, BankTrade, Bank, Country, PriceExchange } = require('../../../../models');
+const { TradingCurrencies, Currency, BankTrade, Bank, Country, PriceExchange } = require('./entity');
 
 /**
  * Implementación del repositorio de Trading usando Sequelize

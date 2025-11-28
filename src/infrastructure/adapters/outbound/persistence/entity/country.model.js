@@ -1,13 +1,10 @@
 const { Model, DataTypes } = require('sequelize');
-const sequelize = require("../infrastructure/config/DatabaseConfig");
-const Country = require('./country.model');
+const sequelize = require("../../../../config/DatabaseConfig");
 
-class Currency extends Model {
-    
-}
+class Country extends Model {}
 
-Currency.init({
-    id:{
+Country.init({
+    id: {
         type: DataTypes.INTEGER,
         primaryKey: true,
         autoIncrement: true
@@ -17,19 +14,23 @@ Currency.init({
         allowNull: false,
         unique: true
     },
-    code_iso3:{
+    code_iso3: {
         type: DataTypes.STRING(3),
         allowNull: false,
         unique: true
     },
-    name: {
+    name_iso: {
         type: DataTypes.STRING(50),
-        allowNull:false,
+        allowNull: false,
         unique: true
     },
-    id_country:{
-        type: DataTypes.INTEGER,
-        allowNull:false,
+    code_phone_iso:{
+        type: DataTypes.STRING(4),
+        allowNull: false,
+        unique: true
+    },
+    unicode_flag:{
+        type: DataTypes.STRING(15),
     },
     status:{
         type: DataTypes.STRING(1),
@@ -45,15 +46,9 @@ Currency.init({
     }
 }, {
     sequelize,
-    modelName: 'Currency',
-    tableName: 'currencies',
+    modelName: 'Country',
+    tableName: 'country',
     timestamps: false
 });
 
-Currency.belongsTo(Country, {
-    foreignKey: 'id_country',
-    as: 'Country',
-    constraints: false,
-    targetKey: 'id'
-})
-module.exports = Currency;
+module.exports = Country;

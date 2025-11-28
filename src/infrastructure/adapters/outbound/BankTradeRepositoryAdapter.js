@@ -1,7 +1,7 @@
 const structuredLogger = require('../../config/StructuredLogger');
-const BankTrade = require('../../models/bankTrade.model');
-const Country = require('../../models/country.model');
-const Bank = require('../../models/bank.model');
+const BankTrade = require('./persistence/entity/bankTrade.model');
+const Country = require('./persistence/entity/country.model');
+const Bank = require('./persistence/entity/bank.model');
 
 /**
  * Adaptador de repositorio para BankTrade

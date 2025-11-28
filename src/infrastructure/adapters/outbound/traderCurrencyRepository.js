@@ -1,4 +1,4 @@
-const { PriceExchange, Currency, Country } = require('../../../models');
+const { PriceExchange, Currency, Country } = require('./persistence/entity');
 
 class TraderCurrencyRepository {
     

@@ -1,4 +1,4 @@
-const { Beneficiary, Bank, TypeAccountBank } = require('../../../models')
+const { Beneficiary, Bank, TypeAccountBank } = require('./persistence/entity')
 
 class BeneficiaryRepository {
 

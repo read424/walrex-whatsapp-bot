@@ -1,4 +1,4 @@
-const { ChatMessage } = require('../../../models');
+const { ChatMessage } = require('./persistence/entity');
 const { RESPONDER_TYPES } = require('../../../domain/constants/WhatsAppConstants');
 const structuredLogger = require('../../config/StructuredLogger');
 

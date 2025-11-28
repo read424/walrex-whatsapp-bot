@@ -1,4 +1,4 @@
-const { ChatSession, Contact, ChatMessage, Advisor } = require('../../../../models');
+const { ChatSession, Contact, ChatMessage, Advisor } = require('./entity');
 const { Op } = require('sequelize');
 const Conversation = require('../../../../domain/model/Conversation');
 const ConversationRepositoryPort = require('../../../../application/ports/output/ConversationRepositoryPort');

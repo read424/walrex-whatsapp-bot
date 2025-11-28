@@ -1,8 +1,8 @@
 const ChatSessionRepositoryPort = require('../../../../application/ports/output/ChatSessionRepositoryPort');
 const ChatSession = require('../../../../domain/model/ChatSession');
-const ChatSessionModel = require('../../../../models/chatSession.model');
-const ContactModel = require('../../../../models/Contact.model');
-const ChatMessageModel = require('../../../../models/chatMessage.model');
+const ChatSessionModel = require('./entity/chatSession.model');
+const ContactModel = require('./entity/Contact.model');
+const ChatMessageModel = require('./entity/chatMessage.model');
 
 /**
  * Implementación del repositorio de sesiones de chat usando Sequelize

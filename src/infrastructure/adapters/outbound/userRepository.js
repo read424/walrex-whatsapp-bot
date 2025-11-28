@@ -1,4 +1,4 @@
-const { User, Customer, InviteReferral } = require('../../../models');
+const { User, Customer, InviteReferral } = require('./persistence/entity');
 
 class UserRepository {
 

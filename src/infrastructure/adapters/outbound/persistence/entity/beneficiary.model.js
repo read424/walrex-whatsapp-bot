@@ -1,5 +1,5 @@
 const { Model, DataTypes } = require('sequelize');
-const sequelize = require('../infrastructure/config/DatabaseConfig');
+const sequelize = require('../../../../config/DatabaseConfig');
 const Bank = require('./bank.model')
 const TypeAccountBank = require('./type_account_bank.model');
 

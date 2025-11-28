@@ -1,5 +1,5 @@
 const { Model, DataTypes, Op } = require('sequelize');
-const sequelize = require('../infrastructure/config/DatabaseConfig');
+const sequelize = require('../../../../config/DatabaseConfig');
 const Connection = require('./Connection.model');
 
 class WhatsAppConnection extends Model {}

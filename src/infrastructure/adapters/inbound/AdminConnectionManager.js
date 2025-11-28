@@ -1,6 +1,6 @@
 const fs = require('fs').promises;
 const path = require('path');
-const { WhatsAppConnection } = require('../../../models/index');
+const { WhatsAppConnection } = require('../outbound/persistence/entity/index');
 const { structuredLogger } = require('../../config/StructuredLogger');
 const { Op } = require('sequelize');
 

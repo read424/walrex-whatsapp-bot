@@ -1,5 +1,5 @@
 const ConnectionRepositoryPort = require('../../../../application/ports/output/ConnectionRepositoryPort');
-const ConnectionModel = require('../../../../models/Connection.model');
+const ConnectionModel = require('./entity/Connection.model');
 const ConnectionDomain = require('../../../../domain/model/Connection');
 
 /**

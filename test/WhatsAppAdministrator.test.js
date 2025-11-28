@@ -178,7 +178,7 @@ describe('WhatsAppAdministrator', () => {
         whatsAppAdmin.sendMessage = jest.fn();
         
         // Obtener referencia a los modelos mockeados
-        mockModels = require('../models');
+        mockModels = require('../src/infrastructure/adapters/outbound/persistence/entity');
     });
 
     describe('handleTasaPrecioFromBinance', () => {
