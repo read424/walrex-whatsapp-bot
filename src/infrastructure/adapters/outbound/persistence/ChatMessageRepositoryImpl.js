@@ -132,7 +132,7 @@ class ChatMessageRepositoryImpl extends ChatMessageRepositoryPort {
                 include: [
                     { model: ContactModel, as: 'contact' }
                 ],
-                order: [['createdAt', 'DESC']],
+                order: [['created_at', 'DESC']],
                 limit,
                 offset
             })
