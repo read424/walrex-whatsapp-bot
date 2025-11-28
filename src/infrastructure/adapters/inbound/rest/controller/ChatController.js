@@ -29,6 +29,7 @@ class ChatController {
      * @param {Object} dependencies.getChatSessionsUseCase - Caso de uso para obtener sesiones
      * @param {Object} dependencies.getChatMessagesUseCase - Caso de uso para obtener mensajes
      * @param {Object} dependencies.sendChatMessageUseCase - Caso de uso para enviar mensajes
+     * @param {Object} dependencies.sendMessageToConversationUseCase - Caso de uso para enviar mensajes a conversaciones
      * @param {Object} dependencies.updateChatSessionUseCase - Caso de uso para actualizar sesiones
      * @param {Object} dependencies.manageContactsUseCase - Caso de uso para gestionar contactos
      * @param {Object} dependencies.logger - Adaptador de logging
@@ -39,6 +40,7 @@ class ChatController {
         getChatMessagesUseCase,
         getConversationMessagesUseCase,
         sendChatMessageUseCase,
+        sendMessageToConversationUseCase,
         updateChatSessionUseCase,
         manageContactsUseCase,
         logger
@@ -72,6 +74,7 @@ class ChatController {
         this.getChatMessagesUseCase = getChatMessagesUseCase;
         this.getConversationMessagesUseCase = getConversationMessagesUseCase;
         this.sendChatMessageUseCase = sendChatMessageUseCase;
+        this.sendMessageToConversationUseCase = sendMessageToConversationUseCase;
         this.updateChatSessionUseCase = updateChatSessionUseCase;
         this.manageContactsUseCase = manageContactsUseCase;
         this.logger = logger;
@@ -200,7 +203,7 @@ class ChatController {
         try {
             const { conversationId } = req.params;
             const { page, limit } = req.query;
-            const tenantId = req.headers['x-tenant-id'];
+            const tenantId = req.headers['X-tenant-id'];
 
             const result = await this.getConversationMessagesUseCase.execute({
                 conversationId: parseInt(conversationId),
@@ -340,6 +343,92 @@ class ChatController {
 
         } catch (error) {
             return this.handleError(error, res, 'createContact');
+        }
+    }
+
+    /**
+     * POST /api/chat/send-message
+     * POST /api/inbox/conversations/:conversationId/messages
+     * Envía un mensaje a una conversación específica
+     * Requiere autenticación y X-Tenant-Id header
+     */
+    async sendMessageToConversation(req, res) {
+        const startTime = Date.now();
+
+        try {
+            // Validar que el caso de uso esté inyectado
+            if (!this.sendMessageToConversationUseCase) {
+                this.logger.error('ChatController', 'sendMessageToConversationUseCase not initialized');
+                return res.status(503).json({
+                    success: false,
+                    message: 'Servicio de envío de mensajes no disponible',
+                    error: {
+                        code: 'SERVICE_NOT_INITIALIZED',
+                        details: 'SendMessageToConversationUseCase no ha sido inyectado. Verifique la configuración de dependencias.'
+                    }
+                });
+            }
+
+            // Extraer datos del request
+            const { conversationId, content, type = 'text', replyTo, metadata } = req.body;
+            const userId = req.user?.id; // Inyectado por middleware de autenticación
+            const tenantId = req.tenantId; // Inyectado por middleware ensureTenantId
+
+            // Validación básica de parámetros requeridos
+            if (!conversationId) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'conversationId es requerido',
+                    error: {
+                        code: 'MISSING_CONVERSATION_ID',
+                        details: 'Debe proporcionar un conversationId en el body o en los params'
+                    }
+                });
+            }
+
+            if (!content) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'content es requerido',
+                    error: {
+                        code: 'MISSING_CONTENT',
+                        details: 'Debe proporcionar el contenido del mensaje'
+                    }
+                });
+            }
+
+            this.logger.info('ChatController', 'POST /send-message', {
+                conversationId,
+                type,
+                userId,
+                tenantId,
+                ip: req.ip
+            });
+
+            // Ejecutar caso de uso
+            const result = await this.sendMessageToConversationUseCase.execute({
+                conversationId,
+                content,
+                type,
+                replyTo,
+                metadata,
+                userId,
+                tenantId
+            });
+
+            // Log de performance
+            this.logger.performance(
+                'ChatController',
+                'sendMessageToConversation',
+                Date.now() - startTime,
+                { conversationId, messageId: result.data?.id }
+            );
+
+            // Retornar respuesta exitosa
+            return res.status(201).json(result);
+
+        } catch (error) {
+            return this.handleError(error, res, 'sendMessageToConversation');
         }
     }
 
