@@ -15,12 +15,21 @@ const BankTrade = require("./bankTrade.model");
 const TypeAccountBank = require('./type_account_bank.model');
 const TradingCurrencies = require('./tradingCurrencies.model');
 const UserType = require('./UserType.model');
+
+// ==================== MODELOS DE CONEXIONES ====================
+// PRINCIPAL: ChannelConnection (tabla unificada para todos los canales)
+const ChannelConnection = require('./ChannelConnection.model');
+
+// DEPRECATED: Mantener temporalmente para compatibilidad, eliminar después de testing
 const WhatsAppConnection = require('./WhatsAppConnection');
 const Connection = require('./Connection.model');
-const ChannelConnection = require('./ChannelConnection.model');
 
 // Definir las relaciones entre modelos
 const models = {
+    // Modelo principal de conexiones
+    ChannelConnection,
+
+    // Modelos de negocio
     Customer,
     TypeDocumentId,
     Advisor,
@@ -38,9 +47,10 @@ const models = {
     TypeAccountBank,
     TradingCurrencies,
     UserType,
+
+    // DEPRECATED: Mantener temporalmente
     Connection,
     WhatsAppConnection,
-    ChannelConnection,
 };
 
 // Establecer las asociaciones

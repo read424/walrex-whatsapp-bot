@@ -13,8 +13,6 @@
 const WhatsAppWebJsStrategy = require('../adapters/inbound/whatsappWebJsStrategy');
 const WhatsAppEventHandler = require('../adapters/inbound/whatsapp/WhatsAppEventHandler');
 const WhatsAppMessageHandler = require('../adapters/inbound/whatsapp/WhatsAppMessageHandler');
-const ConnectionRepositoryImpl = require('../adapters/outbound/persistence/ConnectionRepositoryImpl');
-const WhatsAppConnectionRepositoryImpl = require('../adapters/outbound/persistence/WhatsAppConnectionRepositoryImpl');
 const StructuredLoggerAdapter = require('../adapters/outbound/logging/StructuredLoggerAdapter');
 const ChatServiceFactory = require('./ChatServiceFactory');
 
@@ -35,17 +33,11 @@ class WhatsAppStrategyFactory {
         // Instanciar logger
         const logger = new StructuredLoggerAdapter();
 
-        // Instanciar repositorios
-        const connectionRepository = new ConnectionRepositoryImpl();
-        const whatsappConnectionRepository = new WhatsAppConnectionRepositoryImpl();
-
         // Instanciar ChatService usando su factory
         const chatService = ChatServiceFactory.create(webSocketAdapter);
 
-        // Instanciar handlers
+        // Instanciar handlers (ahora usan Active Record directamente para channel_connections)
         const eventHandler = new WhatsAppEventHandler({
-            connectionRepository,
-            whatsappConnectionRepository,
             webSocketAdapter,
             logger
         });
@@ -57,8 +49,6 @@ class WhatsAppStrategyFactory {
 
         // Crear la Strategy con todas las dependencias inyectadas
         const strategy = new WhatsAppWebJsStrategy({
-            connectionRepository,
-            whatsappConnectionRepository,
             eventHandler,
             messageHandler,
             chatService,
@@ -74,32 +64,6 @@ class WhatsAppStrategyFactory {
         });
 
         return strategy;
-    }
-
-    /**
-     * Crea una instancia de WhatsAppWebJsStrategy para testing con dependencias mock
-     * @param {Object} mocks - Objetos mock para las dependencias
-     * @returns {WhatsAppWebJsStrategy} - Instancia configurada para testing
-     */
-    static createForTesting(mocks = {}) {
-        const mockLogger = mocks.logger || {
-            info: () => {},
-            error: () => {},
-            warn: () => {},
-            debug: () => {}
-        };
-
-        return new WhatsAppWebJsStrategy({
-            connectionRepository: mocks.connectionRepository || {},
-            whatsappConnectionRepository: mocks.whatsappConnectionRepository || {},
-            eventHandler: mocks.eventHandler || {},
-            messageHandler: mocks.messageHandler || {},
-            chatService: mocks.chatService || {},
-            webSocketAdapter: mocks.webSocketAdapter || {},
-            logger: mockLogger,
-            connectionId: mocks.connectionId || 'test-connection',
-            tenantId: mocks.tenantId || 'test-tenant'
-        });
     }
 }
 

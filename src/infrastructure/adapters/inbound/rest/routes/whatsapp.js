@@ -12,23 +12,23 @@ function createMessageMedia(mimeType, base64Data, filename) {
         if (!mimeType || !base64Data) {
             throw new Error('mimeType and base64Data are required');
         }
-        
+
         if (typeof base64Data !== 'string' || base64Data.length === 0) {
             throw new Error('base64Data must be a non-empty string');
         }
-        
+
         try {
             Buffer.from(base64Data, 'base64');
         } catch (error) {
             throw new Error('Invalid base64 data');
         }
-        
+
         const media = new MessageMedia(mimeType, base64Data, filename || 'file');
-        
+
         if (!media || !media.mimetype || !media.data) {
             throw new Error('Failed to create valid MessageMedia object');
         }
-        
+
         return media;
     } catch (error) {
         structuredLogger.error('WHATSAPP_ROUTES', 'Error creating MessageMedia', error, {
@@ -46,21 +46,29 @@ function createMessageMedia(mimeType, base64Data, filename) {
  */
 router.post('/connect', async (req, res) => {
     try {
-        const { connectionId, connectionName, tenantId } = req.body;
-        
+        const { connectionId } = req.body;
+
+        if (!connectionId) {
+            return res.status(400).json({ error: 'Connection ID is required' });
+        }
+
+        const tenantId = req.headers['x-tenant-id'];
+
+        if (!tenantId) {
+            return res.status(400).json({ error: 'Tenant ID is required' });
+        }
+
         structuredLogger.info('WHATSAPP_ROUTES', 'Creating new WhatsApp connection', {
             connectionId,
             tenantId,
-            connectionName,
             correlationId: req.correlationId
         });
 
-        const result = await req.connectionManager.createNewConnection(connectionId, connectionName, tenantId);
+        const result = await req.connectionManager.createNewConnection(connectionId, tenantId);
         res.json(result);
     } catch (error) {
         structuredLogger.error('WHATSAPP_ROUTES', 'Error creating WhatsApp connection', error, {
-            connectionName: req.body?.connectionName,
-            connectionId: req.body?.connectionId,
+            connectionId: connectionId,
             correlationId: req.correlationId
         });
         res.status(500).json({ error: error.message || 'Failed to create new connection' });
@@ -74,7 +82,7 @@ router.post('/connect', async (req, res) => {
 router.get('/tenants-info', async (req, res) => {
     try {
         const tenantsInfo = req.webSocketAdapter.getTenantsInfo();
-        
+
         structuredLogger.info('WHATSAPP_ROUTES', 'Tenants info requested', {
             totalTenants: Object.keys(tenantsInfo).length,
             correlationId: req.correlationId
@@ -132,7 +140,7 @@ router.post('/send-message-media', async (req, res) => {
             bufferSize: imageBuffer?.length || 0,
             correlationId: req.correlationId
         });
-        
+
         const whatsappContext = req.whatsappContext;
         if (!whatsappContext) {
             structuredLogger.error('WHATSAPP_ROUTES', 'WhatsApp context not available', {
@@ -141,7 +149,7 @@ router.post('/send-message-media', async (req, res) => {
             });
             return res.status(500).json({ error: 'WhatsApp context not available' });
         }
-        
+
         if (typeof imageBuffer !== 'string' || imageBuffer.length === 0) {
             structuredLogger.error('WHATSAPP_ROUTES', 'Invalid imageBuffer provided', {
                 numberphone,
@@ -151,7 +159,7 @@ router.post('/send-message-media', async (req, res) => {
             });
             return res.status(400).json({ error: 'Invalid imageBuffer provided' });
         }
-        
+
         let buffer;
         try {
             buffer = Buffer.from(imageBuffer, 'base64');
@@ -163,7 +171,7 @@ router.post('/send-message-media', async (req, res) => {
             });
             return res.status(400).json({ error: 'Invalid base64 image data' });
         }
-        
+
         const maxSizeBytes = 16 * 1024 * 1024; // 16MB
         if (buffer.length > maxSizeBytes) {
             structuredLogger.error('WHATSAPP_ROUTES', 'File size too large', {
@@ -174,7 +182,7 @@ router.post('/send-message-media', async (req, res) => {
             });
             return res.status(400).json({ error: 'File size too large. Maximum size is 16MB' });
         }
-        
+
         let media;
         try {
             media = createMessageMedia(
@@ -191,13 +199,13 @@ router.post('/send-message-media', async (req, res) => {
             });
             throw new Error(`Failed to create MessageMedia: ${mediaError.message}`);
         }
-        
+
         await whatsappContext.sendMessageMedia(numberphone, media);
         structuredLogger.info('WHATSAPP_ROUTES', 'Media message sent successfully', {
             numberphone,
             correlationId: req.correlationId
         });
-        
+
         res.status(200).json({ success: true, message: 'Message sent successfully' });
     } catch (error) {
         structuredLogger.error('WHATSAPP_ROUTES', 'Send media message error', error, {
@@ -245,13 +253,13 @@ router.get('/status', async (req, res) => {
         if (!whatsappContext) {
             return res.status(500).json({ error: 'WhatsApp context not available' });
         }
-        
+
         const status = whatsappContext.getClientStatus();
         structuredLogger.info('WHATSAPP_ROUTES', 'WhatsApp status request', {
             status,
             correlationId: req.correlationId
         });
-        
+
         res.status(200).json({
             status,
             hasContext: !!whatsappContext,
@@ -378,7 +386,7 @@ router.post('/typing', (req, res) => {
     try {
         const { phoneNumber, action, duration } = req.body;
         const whatsappContext = req.whatsappContext;
-        
+
         if (!whatsappContext || !whatsappContext.strategy) {
             return res.status(400).json({
                 success: false,
@@ -439,7 +447,7 @@ router.post('/restart-connection', async (req, res) => {
         const { clientId } = req.body;
         const tenantId = req.headers['x-tenant-id'] ? parseInt(req.headers['x-tenant-id']) : null;
 
-        if(!clientId || !tenantId){
+        if (!clientId || !tenantId) {
             return res.status(400).json({
                 success: false,
                 message: 'clientId y tenantId son requeridos'
@@ -448,7 +456,7 @@ router.post('/restart-connection', async (req, res) => {
 
         const result = await req.connectionManager.restartConnection(clientId, tenantId);
         res.json(result);
-    }catch(error){
+    } catch (error) {
         structuredLogger.error('WHATSAPP_ROUTES', 'Error restaring connection', error);
         res.status(500).json({
             success: false,
@@ -484,9 +492,9 @@ router.post('/reset-device', async (req, res) => {
 router.get('/listener-status/:clientId', async (req, res) => {
     try {
         const { clientId } = req.params;
-        
+
         const connectionData = req.connectionManager.activeConnections.get(clientId);
-        
+
         if (!connectionData) {
             return res.status(404).json({
                 success: false,
@@ -495,7 +503,7 @@ router.get('/listener-status/:clientId', async (req, res) => {
         }
 
         const listenerStatus = connectionData.strategy.getListenerStatus();
-        
+
         res.json({
             success: true,
             clientId: clientId,

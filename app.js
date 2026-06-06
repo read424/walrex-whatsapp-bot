@@ -63,7 +63,7 @@ const routes = require('./src/infrastructure/adapters/inbound/routes');
 // Cargar rutas v2
 const channelConnectionsRoutesV2 = require('./src/infrastructure/adapters/inbound/rest/routes/v2/connections')(channelConnectionController);
 
-app.use(async (req, res, next)=> {
+app.use(async (req, res, next) => {
     req.connectionManager = connectionManager;
     req.webSocketAdapter = webSocketAdapter;
     next();
@@ -76,22 +76,23 @@ app.use('/api', routes);
 app.use('/api/v2/connections', channelConnectionsRoutesV2);
 
 //Initialize the client 
-(async ()=> {
-    try{
+(async () => {
+    try {
         structuredLogger.info('APP', 'Initializing WhatsApp connection system');
-        
+
         // Inicializar el sistema (incluye restauración automática de conexiones)
-        await connectionManager.initialize();
+        //await connectionManager.initialize();
 
         // Iniciar monitoreo cada 30 segundos
-        //setInterval(() => connectionManager.monitorConnections(), MONITORING_INTERVAL);
+        // TEMPORALMENTE DESHABILITADO: Causaba loop infinito
+        // setInterval(() => connectionManager.monitorConnections(), MONITORING_INTERVAL);
 
         structuredLogger.info('APP', 'WhatsApp context initialized successfully', {
             action: 'context_initialized'
         });
 
         structuredLogger.info('APP', 'WhatsApp system initialized successfully');
-    }catch(error){
+    } catch (error) {
         structuredLogger.error('APP', 'Failed to initialize WhatsApp system', error);
     }
 })();
@@ -107,7 +108,7 @@ server.listen(port, () => {
 // Manejo de señales para un cierre ordenado
 const gracefulShutdown = async (signal) => {
     structuredLogger.info('APP', `Received ${signal} signal. Shutting down gracefully...`);
-    
+
     try {
         await connectionManager.destroy();
         server.close(() => {
@@ -126,7 +127,7 @@ process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 
 process.on('uncaughtException', async (error) => {
     structuredLogger.error('APP', 'Uncaught exception', error);
-    await connectionManager.destroy().catch(() => {});
+    await connectionManager.destroy().catch(() => { });
     process.exit(1);
 });
 
@@ -135,6 +136,6 @@ process.on('unhandledRejection', async (reason, promise) => {
         reason: reason?.message || reason,
         promise: promise?.toString()
     });
-    await connectionManager.destroy().catch(() => {});
+    await connectionManager.destroy().catch(() => { });
     process.exit(1);
 });

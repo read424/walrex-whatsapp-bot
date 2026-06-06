@@ -173,7 +173,7 @@ ChannelConnection.init({
 /**
  * Actualiza el estado de la conexión
  */
-ChannelConnection.prototype.updateStatus = async function(newStatus, error = null) {
+ChannelConnection.prototype.updateStatus = async function (newStatus, error = null) {
     this.status = newStatus;
     this.last_seen = new Date();
     if (error) {
@@ -186,16 +186,16 @@ ChannelConnection.prototype.updateStatus = async function(newStatus, error = nul
 /**
  * Reinicia los intentos de conexión
  */
-ChannelConnection.prototype.resetConnectionAttempts = async function() {
+ChannelConnection.prototype.resetConnectionAttempts = async function () {
     this.connection_attempts = 0;
     this.last_error = null;
     return await this.save();
 };
 
 /**
- * Actualiza la metadata de la conexión
+ * Actualiza la metadata de la conexión (reemplaza completamente)
  */
-ChannelConnection.prototype.updateMetadata = async function(metadata) {
+ChannelConnection.prototype.updateMetadata = async function (metadata) {
     this.connection_metadata = {
         ...this.connection_metadata,
         ...metadata,
@@ -205,30 +205,42 @@ ChannelConnection.prototype.updateMetadata = async function(metadata) {
 };
 
 /**
+ * Agrega metadata sin sobrescribir la existente (método preferido)
+ */
+ChannelConnection.prototype.appendMetadata = async function (newMetadata) {
+    this.connection_metadata = {
+        ...this.connection_metadata,
+        ...newMetadata,
+        lastUpdate: new Date().toISOString()
+    };
+    return await this.save();
+};
+
+/**
  * Verifica si es una conexión de WhatsApp
  */
-ChannelConnection.prototype.isWhatsApp = function() {
+ChannelConnection.prototype.isWhatsApp = function () {
     return this.channel_type === 'whatsapp_web' || this.channel_type === 'whatsapp_api';
 };
 
 /**
  * Verifica si es una conexión de redes sociales (Meta)
  */
-ChannelConnection.prototype.isSocialMedia = function() {
+ChannelConnection.prototype.isSocialMedia = function () {
     return ['instagram_direct', 'facebook_messenger'].includes(this.channel_type);
 };
 
 /**
  * Obtiene configuración específica del canal
  */
-ChannelConnection.prototype.getChannelConfig = function() {
+ChannelConnection.prototype.getChannelConfig = function () {
     return this.channel_config || {};
 };
 
 /**
  * Actualiza configuración del canal
  */
-ChannelConnection.prototype.updateChannelConfig = async function(config) {
+ChannelConnection.prototype.updateChannelConfig = async function (config) {
     this.channel_config = {
         ...this.channel_config,
         ...config
@@ -239,7 +251,7 @@ ChannelConnection.prototype.updateChannelConfig = async function(config) {
 /**
  * Genera el webhook URL para canales que lo requieran
  */
-ChannelConnection.prototype.getWebhookUrl = function(baseUrl) {
+ChannelConnection.prototype.getWebhookUrl = function (baseUrl) {
     const webhookPaths = {
         'whatsapp_api': '/webhook/whatsapp',
         'instagram_direct': '/webhook/instagram',
@@ -258,7 +270,7 @@ ChannelConnection.prototype.getWebhookUrl = function(baseUrl) {
 /**
  * Obtiene todas las conexiones activas de un tenant
  */
-ChannelConnection.getActiveConnectionsByTenant = async function(tenantId) {
+ChannelConnection.getActiveConnectionsByTenant = async function (tenantId) {
     return await this.findAll({
         where: {
             tenant_id: tenantId,
@@ -270,9 +282,29 @@ ChannelConnection.getActiveConnectionsByTenant = async function(tenantId) {
 };
 
 /**
+ * Busca una conexión por nombre y tenant (método principal para obtener conexiones)
+ */
+ChannelConnection.findByConnectionName = async function (connectionName, tenantId) {
+    return await this.findOne({
+        where: {
+            connection_name: connectionName,
+            tenant_id: tenantId,
+            is_active: true
+        }
+    });
+};
+
+/**
+ * Obtiene una conexión por ID (para compatibilidad con código legacy)
+ */
+ChannelConnection.getConnectionById = async function (connectionId) {
+    return await this.findByPk(connectionId);
+};
+
+/**
  * Obtiene conexiones por tipo de canal
  */
-ChannelConnection.getConnectionsByChannelType = async function(channelType, tenantId = null) {
+ChannelConnection.getConnectionsByChannelType = async function (channelType, tenantId = null) {
     const where = {
         channel_type: channelType,
         is_active: true
@@ -291,7 +323,7 @@ ChannelConnection.getConnectionsByChannelType = async function(channelType, tena
 /**
  * Busca una conexión por nombre y tenant
  */
-ChannelConnection.findByNameAndTenant = async function(connectionName, tenantId) {
+ChannelConnection.findByNameAndTenant = async function (connectionName, tenantId) {
     return await this.findOne({
         where: {
             connection_name: connectionName,
@@ -303,7 +335,7 @@ ChannelConnection.findByNameAndTenant = async function(connectionName, tenantId)
 /**
  * Obtiene conexiones que necesitan reconexión
  */
-ChannelConnection.getConnectionsNeedingReconnect = async function(maxAttempts = 5) {
+ChannelConnection.getConnectionsNeedingReconnect = async function (maxAttempts = 5) {
     return await this.findAll({
         where: {
             status: ['error', 'disconnected'],
@@ -319,7 +351,7 @@ ChannelConnection.getConnectionsNeedingReconnect = async function(maxAttempts = 
 /**
  * Cuenta conexiones por tipo de canal
  */
-ChannelConnection.countByChannelType = async function(tenantId) {
+ChannelConnection.countByChannelType = async function (tenantId) {
     return await this.findAll({
         attributes: [
             'channel_type',

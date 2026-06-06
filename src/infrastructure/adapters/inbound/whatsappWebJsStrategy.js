@@ -1,19 +1,6 @@
-/**
- * WhatsAppWebJsStrategy - Implementación de WhatsAppConnectionPort
- *
- * Responsabilidades:
- * - Implementar la interfaz WhatsAppConnectionPort usando whatsapp-web.js
- * - Gestionar el ciclo de vida del cliente WhatsApp
- * - Coordinar con EventHandler y MessageHandler
- * - Gestión de sesiones LocalAuth
- *
- * Esta clase IMPLEMENTA el patrón Strategy para conexiones WhatsApp.
- * En el futuro se pueden crear otras estrategias (Baileys, API Oficial, etc.)
- * que implementen la misma interfaz WhatsAppConnectionPort.
- */
-
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const WhatsAppConnectionPort = require('../../../application/ports/output/WhatsAppConnectionPort');
+const { ChannelConnection } = require('../outbound/persistence/entity');
 const path = require('path');
 const fs = require('fs').promises;
 
@@ -21,8 +8,6 @@ class WhatsAppWebJsStrategy extends WhatsAppConnectionPort {
     /**
      * Constructor con inyección de dependencias
      * @param {Object} dependencies - Dependencias
-     * @param {Object} dependencies.connectionRepository - Repositorio de conexiones
-     * @param {Object} dependencies.whatsappConnectionRepository - Repositorio WhatsApp específico
      * @param {Object} dependencies.eventHandler - Manejador de eventos
      * @param {Object} dependencies.messageHandler - Manejador de mensajes
      * @param {Object} dependencies.chatService - Servicio de chat
@@ -32,8 +17,6 @@ class WhatsAppWebJsStrategy extends WhatsAppConnectionPort {
      * @param {string} dependencies.tenantId - ID del tenant
      */
     constructor({
-        connectionRepository,
-        whatsappConnectionRepository,
         eventHandler,
         messageHandler,
         chatService,
@@ -45,13 +28,11 @@ class WhatsAppWebJsStrategy extends WhatsAppConnectionPort {
         super();
 
         // Validar dependencias requeridas
-        if (!connectionRepository || !whatsappConnectionRepository || !eventHandler ||
+        if (!eventHandler ||
             !messageHandler || !chatService || !webSocketAdapter || !logger) {
             throw new Error('All dependencies are required for WhatsAppWebJsStrategy');
         }
 
-        this.connectionRepository = connectionRepository;
-        this.whatsappConnectionRepository = whatsappConnectionRepository;
         this.eventHandler = eventHandler;
         this.messageHandler = messageHandler;
         this.chatService = chatService;
@@ -78,7 +59,6 @@ class WhatsAppWebJsStrategy extends WhatsAppConnectionPort {
 
         // Referencias a registros de BD
         this.connectionRecord = null;
-        this.connectionWhatsapp = null;
 
         // Contadores QR
         this.qrAttempts = 0;
@@ -101,8 +81,6 @@ class WhatsAppWebJsStrategy extends WhatsAppConnectionPort {
             // Resetear contador de intentos de QR al inicializar (importante después de timeout)
             this.resetQRAttempts();
 
-            this.configureSessionBasePath();
-
             this.logger.info('WhatsAppWebJsStrategy', 'Initializing WhatsApp client', {
                 tenantId: this.tenantId,
                 dataPath: this.sessionBasePath
@@ -111,21 +89,20 @@ class WhatsAppWebJsStrategy extends WhatsAppConnectionPort {
             // Buscar o crear registro en la base de datos
             await this.ensureConnectionRecord();
 
-            const ignoreRestoreSession = process.env.IGNORE_RESTORE_SESSION === 'true';
-            const authConfig = ignoreRestoreSession
-                ? {}
-                : { clientId: this.connectionName };
+            const sanitizedClientId = this.connectionName
+                ? this.connectionName.replace(/[^a-zA-Z0-9_-]/g, '_')
+                : `connection_${this.connectionId}`;
 
             this.logger.info('WhatsAppWebJsStrategy', 'LocalAuth configuration', {
                 connectionId: this.connectionId,
-                ignoreRestoreSession,
-                authConfig
+                originalConnectionName: this.connectionName,
+                sanitizedClientId
             });
 
             // Crear cliente de WhatsApp con configuración mejorada para estabilidad
             this.client = new Client({
                 authStrategy: new LocalAuth({
-                    clientId: 'walrex_bot'
+                    clientId: sanitizedClientId
                 }),
                 puppeteer: {
                     headless: true,
@@ -161,10 +138,28 @@ class WhatsAppWebJsStrategy extends WhatsAppConnectionPort {
             this.setupEventListeners();
 
             // Agregar listener para errores no manejados del cliente
-            this.client.on('error', (error) => {
+            this.client.on('error', async (error) => {
                 this.logger.error('WhatsAppWebJsStrategy', 'WhatsApp client error', error, {
                     connectionId: this.connectionId
                 });
+
+                // Actualizar el estado de la conexión en la base de datos
+                try {
+                    if (!this.connectionRecord)
+                        throw new Error(`Connection record not found for connectionId: ${this.connectionId}. Cannot update status to error.`);
+
+                    const errorMessage = error?.message || error?.toString() || 'Unknown WhatsApp client error';
+                    await this.connectionRecord.updateStatus('error', errorMessage);
+
+                    this.logger.info('WhatsAppWebJsStrategy', 'Connection status updated to error', {
+                        connectionId: this.connectionId,
+                        error: errorMessage
+                    });
+                } catch (updateError) {
+                    this.logger.error('WhatsAppWebJsStrategy', 'Failed to update connection status', updateError, {
+                        connectionId: this.connectionId
+                    });
+                }
             });
 
             // Inicializar cliente con manejo de errores mejorado
@@ -203,21 +198,6 @@ class WhatsAppWebJsStrategy extends WhatsAppConnectionPort {
     }
 
     /**
-     * Configura la ruta base de sesiones
-     */
-    configureSessionBasePath() {
-        const changeDirectorySession = process.env.CHANGE_DIRECTORY_SESSION === 'true';
-        this.logger.info('WhatsAppWebJsStrategy', 'Define Session Path', {
-            sessionBasePath: this.sessionBasePath,
-            isChangeDirectory: changeDirectorySession
-        });
-
-        if (!this.sessionBasePath && changeDirectorySession) {
-            this.sessionBasePath = path.join(__dirname, '../../../sessions');
-        }
-    }
-
-    /**
      * Configura los event listeners delegando al EventHandler
      */
     setupEventListeners() {
@@ -230,7 +210,6 @@ class WhatsAppWebJsStrategy extends WhatsAppConnectionPort {
             handleQRTimeout: () => this.handleQRTimeout(),
             clearSession: () => this.clearSession(),
             notifyQRAvailable: (qr) => this.notifyQRAvailable(qr),
-            whatsappConnection: this.connectionWhatsapp,
             connectionRecord: this.connectionRecord,
             isClientReady: () => this.isClientReady,
             isLoggedIn: () => this.isLoggedIn
@@ -276,85 +255,21 @@ class WhatsAppWebJsStrategy extends WhatsAppConnectionPort {
      */
     async ensureConnectionRecord() {
         try {
-            const { Connection, WhatsAppConnection, ChannelConnection } = require('../outbound/persistence/entity');
-
-            // Primero intentar buscar en la nueva tabla channel_connections
             const channelConnection = await ChannelConnection.findByPk(this.connectionId);
 
-            if (channelConnection) {
-                this.logger.info('WhatsAppWebJsStrategy', 'Found connection in channel_connections', {
-                    connectionId: this.connectionId,
-                    connectionName: channelConnection.connection_name
-                });
-
-                this.connectionName = channelConnection.connection_name;
-
-                // Buscar o crear registro en tabla legacy Connection
-                let [connectionRecord] = await Connection.findOrCreate({
-                    where: { id: this.connectionId },
-                    defaults: {
-                        id: this.connectionId,
-                        name: channelConnection.connection_name,
-                        tenant_id: this.tenantId,
-                        status: 'inactive',
-                        is_active: true
-                    }
-                });
-
-                this.connectionRecord = connectionRecord;
-
-                // Buscar o crear registro de WhatsAppConnection
-                let [whatsappConnection] = await WhatsAppConnection.findOrCreate({
-                    where: { connection_id: this.connectionId },
-                    defaults: {
-                        connection_id: this.connectionId,
-                        status: 'connecting',
-                        qr_code: null,
-                        phone_number: null,
-                        device_info: null,
-                        last_seen: new Date()
-                    }
-                });
-
-                this.connectionWhatsapp = whatsappConnection;
-
-                this.logger.info('WhatsAppWebJsStrategy', 'Connection records synchronized', {
-                    connectionId: this.connectionId,
-                    connectionName: this.connectionName,
-                    whatsappConnectionId: whatsappConnection.id
-                });
-
-            } else {
-                // Fallback: buscar en tabla legacy Connection
-                this.connectionRecord = await Connection.findByPk(this.connectionId);
-
-                if (!this.connectionRecord) {
-                    throw new Error(`Connection record not found for ID: ${this.connectionId}`);
-                }
-
-                this.connectionName = this.connectionRecord.name || `connection_${this.connectionId}`;
-
-                // Buscar o crear registro de WhatsAppConnection
-                let [whatsappConnection] = await WhatsAppConnection.findOrCreate({
-                    where: { connection_id: this.connectionId },
-                    defaults: {
-                        connection_id: this.connectionId,
-                        status: 'connecting',
-                        qr_code: null,
-                        phone_number: null,
-                        device_info: null,
-                        last_seen: new Date()
-                    }
-                });
-
-                this.connectionWhatsapp = whatsappConnection;
-
-                this.logger.info('WhatsAppWebJsStrategy', 'Connection record ensured (legacy)', {
-                    connectionId: this.connectionId,
-                    connectionName: this.connectionName,
-                    whatsappConnectionId: whatsappConnection.id
-                });
+            if (!channelConnection) {
+                throw new Error(`Connection record not found for ID: ${this.connectionId}`);
             }
+
+            this.logger.info('WhatsAppWebJsStrategy', 'Found connection in channel_connections', {
+                connectionId: this.connectionId,
+                connectionName: channelConnection.connection_name,
+                status: channelConnection.status
+            });
+
+            // Guardar referencia y nombre de conexión
+            this.connectionRecord = channelConnection;
+            this.connectionName = channelConnection.connection_name;
 
         } catch (error) {
             this.logger.error('WhatsAppWebJsStrategy', 'Error ensuring connection record', error, {
@@ -618,16 +533,12 @@ class WhatsAppWebJsStrategy extends WhatsAppConnectionPort {
                 isClientReady: this.isClientReady
             });
 
-            // Actualizar estado en la base de datos
+            // Actualizar estado en la base de datos usando Active Record
             if (this.connectionRecord) {
-                await this.connectionRepository.updateStatus(this.connectionId, 'disconnected');
-            }
-
-            if (this.connectionWhatsapp) {
-                await this.whatsappConnectionRepository.update(this.connectionId, {
-                    status: 'disconnected',
-                    lastSeen: new Date()
-                });
+                await ChannelConnection.update(
+                    { status: 'disconnected' },
+                    { where: { id: this.connectionId } }
+                );
             }
 
             // Limpiar timeouts
@@ -709,18 +620,27 @@ class WhatsAppWebJsStrategy extends WhatsAppConnectionPort {
      */
     async clearSession() {
         try {
-            await this.whatsappConnectionRepository.update(this.connectionId, {
-                qrCode: null,
-                phoneNumber: null,
-                deviceInfo: null,
-                status: 'disconnected'
-            });
+            // Limpiar metadata en channel_connections usando Active Record
+            const connection = await ChannelConnection.findByPk(this.connectionId);
+            if (connection) {
+                connection.connection_metadata = {
+                    ...connection.connection_metadata,
+                    qrCode: null,
+                    phoneNumber: null,
+                    deviceInfo: null
+                };
+                await connection.save();
 
-            await this.connectionRepository.updateStatus(this.connectionId, 'inactive');
+                connection.status = 'inactive';
+                await connection.save();
+            }
 
             if (!this.connectionName) return;
 
-            const authSessionDir = path.join(this.sessionBasePath, `session-${this.connectionName}`);
+            // Sanitizar connectionName igual que en init()
+            const sanitizedConnectionName = this.connectionName.replace(/[^a-zA-Z0-9_-]/g, '_');
+
+            const authSessionDir = path.join(this.sessionBasePath, `session-${sanitizedConnectionName}`);
 
             if (await this.directoryExists(authSessionDir)) {
                 await fs.rmdir(authSessionDir, { recursive: true });
@@ -786,74 +706,6 @@ class WhatsAppWebJsStrategy extends WhatsAppConnectionPort {
                 maxAttempts: this.maxQrAttempts
             });
 
-            // Limpiar QR almacenado en la base de datos (tabla antigua)
-            await this.whatsappConnectionRepository.update(this.connectionId, {
-                status: 'disconnected',
-                lastError: 'QR timeout occurred',
-                qrCode: null  // Limpiar QR antiguo
-            });
-
-            // Limpiar QR en channel_connections (nueva tabla v2)
-            try {
-                const ChannelConnectionRepositoryImpl = require('../../../infrastructure/adapters/outbound/persistence/ChannelConnectionRepositoryImpl');
-                const channelConnectionRepo = new ChannelConnectionRepositoryImpl({ logger: this.logger });
-
-                await channelConnectionRepo.updateMetadata(this.connectionId, {
-                    qrCode: null,
-                    qrCodeText: null,
-                    qrGeneratedAt: null,
-                    qrAttempts: this.qrAttempts,
-                    lastError: 'QR timeout occurred'
-                });
-
-                this.logger.debug('WhatsAppWebJsStrategy', 'QR cleared in channel_connections after timeout', {
-                    connectionId: this.connectionId
-                });
-            } catch (error) {
-                this.logger.debug('WhatsAppWebJsStrategy', 'Could not clear QR in channel_connections', {
-                    connectionId: this.connectionId,
-                    error: error.message
-                });
-            }
-
-            // Destruir el cliente de WhatsApp completamente
-            if (this.client) {
-                try {
-                    this.logger.info('WhatsAppWebJsStrategy', 'Destroying WhatsApp client', {
-                        connectionId: this.connectionId
-                    });
-
-                    await this.client.destroy();
-                    this.client = null;
-
-                    this.logger.info('WhatsAppWebJsStrategy', 'WhatsApp client destroyed successfully', {
-                        connectionId: this.connectionId
-                    });
-                } catch (destroyError) {
-                    this.logger.error('WhatsAppWebJsStrategy', 'Error destroying client', destroyError, {
-                        connectionId: this.connectionId
-                    });
-                }
-            }
-
-            this.isLoggedIn = false;
-            this.isClientReady = false;
-            this.currentQR = null;
-
-            // Emitir evento de timeout al frontend
-            this.webSocketAdapter.emitToTenant(this.tenantId, 'qrTimeout', {
-                clientId: this.connectionId,
-                tenantId: this.tenantId,
-                attempts: this.qrAttempts,
-                maxAttempts: this.maxQrAttempts,
-                message: 'Se alcanzó el máximo de intentos para escanear el QR',
-                timestamp: new Date().toISOString()
-            });
-
-            this.logger.info('WhatsAppWebJsStrategy', 'Connection closed due to QR timeout', {
-                connectionId: this.connectionId,
-                attempts: this.qrAttempts
-            });
 
             // Notificar al ConnectionManager que debe remover esta conexión
             // Esto evita que la conexión "zombie" permanezca en memoria
@@ -891,10 +743,27 @@ class WhatsAppWebJsStrategy extends WhatsAppConnectionPort {
                 });
             }
 
+            // MODIFICACIÓN: Resolver la promesa de QR para evitar que el endpoint se quede colgado
+            if (this.qrPromiseResolve) {
+                this.logger.info('WhatsAppWebJsStrategy', 'Resolving QR promise due to timeout', {
+                    connectionId: this.connectionId
+                });
+                this.qrPromiseResolve(null); // Resolvemos con null para indicar fallo/timeout
+                this.qrPromiseResolve = null;
+                this.qrPromise = null;
+            }
+
         } catch (error) {
             this.logger.error('WhatsAppWebJsStrategy', 'Error closing connection due to QR timeout', error, {
                 connectionId: this.connectionId
             });
+
+            // Asegurar que la promesa se resuelva incluso si hay error
+            if (this.qrPromiseResolve) {
+                this.qrPromiseResolve(null);
+                this.qrPromiseResolve = null;
+                this.qrPromise = null;
+            }
         }
     }
 
@@ -917,6 +786,54 @@ class WhatsAppWebJsStrategy extends WhatsAppConnectionPort {
         this.logger.debug('WhatsAppWebJsStrategy', 'QR attempts reset in both Strategy and EventHandler', {
             connectionId: this.connectionId
         });
+    }
+
+    /**
+     * Verifica si existe una sesión guardada para restaurar
+     * @param {string} connectionName - Nombre de la conexión
+     * @returns {Promise<boolean>} - true si existe sesión, false si no
+     */
+    async restoreSessionIfExists(connectionName) {
+        try {
+            if (!connectionName) {
+                this.logger.warn('WhatsAppWebJsStrategy', 'Cannot check for session without connection name');
+                return false;
+            }
+
+            // Sanitizar connectionName igual que en init()
+            const sanitizedConnectionName = connectionName.replace(/[^a-zA-Z0-9_-]/g, '_');
+
+            // Verificar si existe la carpeta de sesión en .wwebjs_auth
+            const sessionPath = path.join(process.cwd(), '.wwebjs_auth', `session-${sanitizedConnectionName}`);
+
+            this.logger.info('WhatsAppWebJsStrategy', 'Checking for existing session', {
+                originalConnectionName: connectionName,
+                sanitizedConnectionName,
+                sessionPath
+            });
+
+            const sessionExists = await this.directoryExists(sessionPath);
+
+            if (sessionExists) {
+                this.logger.info('WhatsAppWebJsStrategy', 'Existing session found', {
+                    connectionName: sanitizedConnectionName,
+                    sessionPath
+                });
+            } else {
+                this.logger.info('WhatsAppWebJsStrategy', 'No existing session found', {
+                    connectionName: sanitizedConnectionName,
+                    sessionPath
+                });
+            }
+
+            return sessionExists;
+
+        } catch (error) {
+            this.logger.error('WhatsAppWebJsStrategy', 'Error checking for existing session', error, {
+                connectionName
+            });
+            return false;
+        }
     }
 
     /**

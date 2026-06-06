@@ -18,18 +18,14 @@ class WhatsAppEventHandler {
     /**
      * Constructor con inyección de dependencias
      * @param {Object} dependencies - Dependencias
-     * @param {Object} dependencies.connectionRepository - Repositorio de conexiones
-     * @param {Object} dependencies.whatsappConnectionRepository - Repositorio específico de WhatsApp
      * @param {Object} dependencies.webSocketAdapter - Adaptador de WebSocket
      * @param {Object} dependencies.logger - Logger
      */
-    constructor({ connectionRepository, whatsappConnectionRepository, webSocketAdapter, logger }) {
-        if (!connectionRepository || !whatsappConnectionRepository || !webSocketAdapter || !logger) {
-            throw new Error('All dependencies are required for WhatsAppEventHandler');
+    constructor({ webSocketAdapter, logger }) {
+        if (!webSocketAdapter || !logger) {
+            throw new Error('webSocketAdapter and logger are required for WhatsAppEventHandler');
         }
 
-        this.connectionRepository = connectionRepository;
-        this.whatsappConnectionRepository = whatsappConnectionRepository;
         this.webSocketAdapter = webSocketAdapter;
         this.logger = logger;
 
@@ -48,7 +44,7 @@ class WhatsAppEventHandler {
      * @param {Object} context - Contexto de la conexión
      */
     setupEventListeners(client, context) {
-        const { connectionId, tenantId, isConnectionClosed, getDeviceInfo, resetQRAttempts } = context;
+        const { connectionId, tenantId, isConnectionClosed, getDeviceInfo } = context;
 
         this.logger.info('WhatsAppEventHandler', 'Setting up event listeners', {
             connectionId,
@@ -111,11 +107,6 @@ class WhatsAppEventHandler {
             if (this.qrAttempts === 0) {
                 // Limpiar cualquier QR antiguo de intentos previos
                 try {
-                    await this.whatsappConnectionRepository.update(connectionId, {
-                        qrCode: null,
-                        lastError: null
-                    });
-
                     const ChannelConnectionRepositoryImpl = require('../../outbound/persistence/ChannelConnectionRepositoryImpl');
                     const channelConnectionRepo = new ChannelConnectionRepositoryImpl({ logger: this.logger });
 
@@ -159,13 +150,7 @@ class WhatsAppEventHandler {
             // Convertir QR a base64
             const base64QR = await QRCode.toDataURL(qr, { type: 'image/png' });
 
-            // Actualizar en base de datos (tabla antigua whatsapp_connections)
-            await this.whatsappConnectionRepository.update(connectionId, {
-                qrCode: base64QR,
-                status: 'qr_generated'
-            });
-
-            // También actualizar en channel_connections (nueva tabla v2)
+            // Actualizar en channel_connections
             try {
                 const ChannelConnectionRepositoryImpl = require('../../outbound/persistence/ChannelConnectionRepositoryImpl');
                 const channelConnectionRepo = new ChannelConnectionRepositoryImpl({ logger: this.logger });
@@ -178,8 +163,12 @@ class WhatsAppEventHandler {
                     qrAttempts: this.qrAttempts
                 });
 
-                // Actualizar status a 'qr_generated' en la tabla principal
-                await this.connectionRepository.updateStatus(connectionId, 'qr_generated');
+                // Actualizar status a 'qr_generated' usando Active Record
+                if (context.connectionRecord) {
+                    await context.connectionRecord.updateStatus('qr_generated');
+                } else {
+                    this.logger.warn('WhatsAppEventHandler', 'connectionRecord not available in context', { connectionId });
+                }
 
                 this.logger.info('WhatsAppEventHandler', 'QR generated and saved - Status updated to qr_generated', {
                     connectionId,
@@ -203,13 +192,26 @@ class WhatsAppEventHandler {
             }
 
             // Emitir QR específicamente al tenant
-            this.webSocketAdapter.emitQRToTenant(tenantId, {
-                qr: base64QR,
-                tenantId,
-                clientId: connectionId,
-                attempts: this.qrAttempts,
-                maxAttempts: this.maxQrAttempts
-            });
+            // MODIFICACIÓN: Solo emitir por WebSocket si NO es el primer intento (el primero va por HTTP)
+            if (this.qrAttempts > 1) {
+                this.webSocketAdapter.emitQRToTenant(tenantId, {
+                    qr: base64QR,
+                    tenantId,
+                    clientId: connectionId,
+                    attempts: this.qrAttempts,
+                    maxAttempts: this.maxQrAttempts
+                });
+
+                this.logger.info('WhatsAppEventHandler', 'QR emitted via WebSocket (retry)', {
+                    connectionId,
+                    attempt: this.qrAttempts
+                });
+            } else {
+                this.logger.info('WhatsAppEventHandler', 'QR NOT emitted via WebSocket (first attempt - handled by HTTP)', {
+                    connectionId,
+                    attempt: this.qrAttempts
+                });
+            }
 
         } catch (error) {
             this.logger.error('WhatsAppEventHandler', 'Error handling QR event', error, {
@@ -239,21 +241,28 @@ class WhatsAppEventHandler {
             // Obtener información del dispositivo
             const deviceInfo = await getDeviceInfo();
 
-            // Actualizar registro de conexión principal
-            await this.connectionRepository.updateStatus(connectionId, 'active');
+            // Actualizar registro de conexión usando Active Record
+            if (context.connectionRecord) {
+                await context.connectionRecord.updateStatus('active');
 
-            // Actualizar registro de WhatsApp Connection
-            await this.whatsappConnectionRepository.update(connectionId, {
-                status: 'connected',
-                qrCode: null,
-                deviceInfo: deviceInfo,
-                phoneNumber: deviceInfo?.phoneNumber || null,
-                lastSeen: new Date()
-            });
+                // Actualizar metadata con deviceInfo
+                try {
+                    const ChannelConnectionRepositoryImpl = require('../../outbound/persistence/ChannelConnectionRepositoryImpl');
+                    const channelConnectionRepo = new ChannelConnectionRepositoryImpl({ logger: this.logger });
 
-            // Reiniciar intentos de conexión
-            if (whatsappConnection && whatsappConnection.resetConnectionAttempts) {
-                await whatsappConnection.resetConnectionAttempts();
+                    await channelConnectionRepo.updateMetadata(connectionId, {
+                        qrCode: null,
+                        deviceInfo: deviceInfo,
+                        phoneNumber: deviceInfo?.phoneNumber || null
+                    });
+                } catch (error) {
+                    this.logger.warn('WhatsAppEventHandler', 'Could not update device info metadata', {
+                        connectionId,
+                        error: error.message
+                    });
+                }
+            } else {
+                this.logger.warn('WhatsAppEventHandler', 'connectionRecord not available in context', { connectionId });
             }
 
             this.logger.info('WhatsAppEventHandler', 'WhatsApp client ready', {
@@ -296,11 +305,12 @@ class WhatsAppEventHandler {
                 resetQRAttempts();
             }
 
-            // Actualizar estado a 'connecting' (proceso de autenticación iniciado)
-            await this.connectionRepository.updateStatus(connectionId, 'connecting');
-            await this.whatsappConnectionRepository.update(connectionId, {
-                status: 'connecting'
-            });
+            // Actualizar estado a 'connecting' usando Active Record
+            if (context.connectionRecord) {
+                await context.connectionRecord.updateStatus('connecting');
+            } else {
+                this.logger.warn('WhatsAppEventHandler', 'connectionRecord not available in context', { connectionId });
+            }
 
             this.logger.info('WhatsAppEventHandler', 'Session authenticated - Status changed to connecting', {
                 connectionId
@@ -343,12 +353,12 @@ class WhatsAppEventHandler {
                 message: msg
             });
 
-            // Actualizar estado a 'inactive' (autenticación fallida)
-            await this.connectionRepository.updateStatus(connectionId, 'inactive');
-            await this.whatsappConnectionRepository.update(connectionId, {
-                status: 'inactive',
-                lastError: msg
-            });
+            // Actualizar estado a 'inactive' usando Active Record
+            if (context.connectionRecord) {
+                await context.connectionRecord.updateStatus('inactive', msg);
+            } else {
+                this.logger.warn('WhatsAppEventHandler', 'connectionRecord not available in context', { connectionId });
+            }
 
             this.logger.warn('WhatsAppEventHandler', 'Auth failure - Status changed to inactive', {
                 connectionId,
@@ -391,14 +401,12 @@ class WhatsAppEventHandler {
                 reason
             });
 
-            // Actualizar estado en WhatsApp Connection
-            await this.whatsappConnectionRepository.update(connectionId, {
-                status: 'disconnected',
-                lastError: reason
-            });
-
-            // Actualizar estado en Connection principal
-            await this.connectionRepository.updateStatus(connectionId, 'inactive');
+            // Actualizar estado usando Active Record
+            if (context.connectionRecord) {
+                await context.connectionRecord.updateStatus('inactive', reason);
+            } else {
+                this.logger.warn('WhatsAppEventHandler', 'connectionRecord not available in context', { connectionId });
+            }
 
             // Emitir desconexión al tenant específico
             this.webSocketAdapter.emitConnectionStatusToTenant(tenantId, {
